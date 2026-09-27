@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 
 describe("App", () => {
-  it("scans on start, adds a light and assigns a zone", async () => {
+  it("scans on start, adds a light and picks its color", async () => {
     vi.mocked(api.discoverDevices).mockResolvedValue([
       { id: "AA:BB", ip: "10.0.0.2", sku: "H6199" },
     ]);
@@ -33,19 +33,21 @@ describe("App", () => {
 
     const trigger = screen.getByRole("button", { name: /h6199/i });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    await user.click(screen.getByText("All · 100%"));
+    await user.click(screen.getByText("Average · 100%"));
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     const light = trigger.closest(".light") as HTMLElement;
 
-    const zones = screen.getByRole("group", { name: /zone for h6199/i });
-    expect(within(zones).getByRole("button", { name: /all/i })).toHaveAttribute(
+    const picker = screen.getByRole("group", { name: /color for h6199/i });
+    expect(within(picker).getByRole("button", { name: "Average" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    const left = within(zones).getByRole("button", { name: /left/i });
+    const left = within(picker).getByRole("button", { name: "Left" });
     await user.click(left);
     expect(left).toHaveAttribute("aria-pressed", "true");
-    expect(useStore.getState().devices[0]?.zone).toBe("left");
+    expect(useStore.getState().devices[0]?.color).toBe("left");
+    // No segments without razer mode.
+    expect(within(light).queryByRole("group", { name: /segments of/i })).toBeNull();
 
     const brightness = within(light).getByRole("slider", { name: "Brightness" });
     fireEvent.change(brightness, { target: { value: "0.5" } });
@@ -62,7 +64,7 @@ describe("App", () => {
           ip: "10.0.0.2",
           sku: "H61F5",
           name: "Strip",
-          zone: "all",
+          color: "all",
           brightness: 1,
           razer: false,
           on: true,
@@ -76,10 +78,37 @@ describe("App", () => {
     await user.click(screen.getByRole("switch", { name: /razer/i }));
     expect(useStore.getState().devices[0]?.razer).toBe(true);
     expect(screen.getByRole("slider", { name: "Segments" })).toBeInTheDocument();
-    expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]).toMatchObject({
-      razer: true,
-      segments: 10,
-    });
+    const lastDevice = () => vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0];
+    expect(lastDevice()).toMatchObject({ razer: true, segments: Array(10).fill("all") });
+
+    // Segments 2-4 red, the rest stay live.
+    const bar = screen.getByRole("group", { name: /segments of strip/i });
+    await user.click(within(bar).getByRole("button", { name: "Segment 2" }));
+    await user.keyboard("{Shift>}");
+    await user.click(within(bar).getByRole("button", { name: "Segment 4" }));
+    await user.keyboard("{/Shift}");
+    expect(screen.getByText("Color · 3 segments")).toBeInTheDocument();
+    const picker = screen.getByRole("group", { name: /color for strip/i });
+    await user.click(within(picker).getByRole("button", { name: "Red" }));
+    expect(lastDevice()?.segments.slice(0, 5)).toEqual([
+      "all",
+      "#ff0000",
+      "#ff0000",
+      "#ff0000",
+      "all",
+    ]);
+    expect(within(picker).getByRole("button", { name: "Red" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Nothing selected: the whole light, which clears the segments.
+    await user.click(
+      within(bar.parentElement as HTMLElement).getByRole("button", { name: "None" }),
+    );
+    expect(screen.getByText("Color · Whole light")).toBeInTheDocument();
+    await user.click(within(picker).getByRole("button", { name: "Center" }));
+    expect(lastDevice()?.segments).toEqual(Array(10).fill("center"));
   });
 
   it("switches one light off and leaves it out of sync", async () => {
@@ -90,7 +119,7 @@ describe("App", () => {
           ip: "10.0.0.2",
           sku: "H6199",
           name: "Lamp",
-          zone: "all",
+          color: "all",
           brightness: 1,
           razer: false,
           on: true,

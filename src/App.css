@@ -236,20 +236,13 @@ ul {
   gap: var(--tk-space-3);
   min-width: 0;
 }
-.dot,
-.swatch {
+.dot {
   flex: none;
   border-radius: var(--tk-knob-radius);
   background: var(--tk-border);
-}
-.dot {
   width: 0.8rem;
   height: 0.8rem;
   box-shadow: 0 0 0 var(--tk-border-width) var(--tk-border-subtle);
-}
-.swatch {
-  width: 0.6rem;
-  height: 0.6rem;
 }
 .light-title {
   display: flex;
@@ -295,13 +288,97 @@ ul {
   padding-left: calc(0.8rem + var(--tk-space-3));
   color: var(--tk-fg);
 }
-.zones,
-.zones > .tk-toggle-lit {
-  flex-wrap: wrap;
+
+/* Segments and colors -------------------------------------------------- */
+
+.segment-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-2);
 }
-.zones {
-  max-width: 100%;
+.segments,
+.picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
+.segments {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.segment {
+  flex: 1;
+  min-width: 0;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--tk-radius-sm);
+  background: var(--tk-surface);
+  box-shadow: inset 0 0 0 var(--tk-border-width) var(--tk-border-subtle);
+  cursor: pointer;
+}
+.segment[aria-pressed="true"] {
+  outline: 2px solid var(--tk-fg);
+  outline-offset: 1px;
+}
+.segment-actions {
+  display: flex;
+  flex: none;
+}
+.picker-block {
+  gap: var(--tk-space-2);
+}
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-2);
+}
+.palette {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-1);
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: var(--tk-space-1);
+}
+.swatch-button {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-2);
+  min-width: 0;
+  padding: 4px 6px;
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius-sm);
+  background: transparent;
+  color: var(--tk-fg);
+  font: inherit;
+  font-size: var(--tk-text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.swatch-button:hover {
+  border-color: var(--tk-border);
+}
+.swatch-button[aria-pressed="true"] {
+  border-color: var(--tk-fg);
+}
+.chip {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: var(--tk-surface);
+  box-shadow: inset 0 0 0 var(--tk-border-width) var(--tk-border-subtle);
+}
+.chip[data-live] {
+  border-radius: 3px;
+}
+
 .light-actions {
   display: flex;
   gap: var(--tk-space-2);

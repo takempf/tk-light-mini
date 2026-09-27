@@ -201,15 +201,15 @@ impl Sender {
         self.send_razer(to);
     }
 
-    /// Stream one color to every segment. Needs `razer_mode` on.
-    pub fn razer_color(&mut self, to: SocketAddr, c: Rgb, segments: u8) {
-        let n = segments.clamp(1, RAZER_MAX_SEGMENTS);
+    /// Stream one color per segment, from the first. Needs `razer_mode` on.
+    pub fn razer_colors(&mut self, to: SocketAddr, colors: &[Rgb]) {
+        let colors = &colors[..colors.len().min(RAZER_MAX_SEGMENTS as usize)];
         self.pkt.clear();
         // Header from LedFx. Byte 4: 0 = one color per segment.
         self.pkt
-            .extend_from_slice(&[0xBB, 0x00, 0xFA, 0xB0, 0x00, n]);
-        for _ in 0..n {
-            self.pkt.extend_from_slice(&c);
+            .extend_from_slice(&[0xBB, 0x00, 0xFA, 0xB0, 0x00, colors.len() as u8]);
+        for c in colors {
+            self.pkt.extend_from_slice(c);
         }
         self.send_razer(to);
     }
@@ -388,9 +388,9 @@ mod tests {
         assert_eq!(BASE64.encode(recv_razer(&rx)), "uwABsQEK");
         s.razer_mode(to, false);
         assert_eq!(BASE64.encode(recv_razer(&rx)), "uwABsQAL");
-        s.razer_color(to, [1, 2, 3], 2);
+        s.razer_colors(to, &[[1, 2, 3], [4, 5, 6]]);
         let p = recv_razer(&rx);
-        assert_eq!(p[..12], [0xBB, 0, 0xFA, 0xB0, 0, 2, 1, 2, 3, 1, 2, 3]);
+        assert_eq!(p[..12], [0xBB, 0, 0xFA, 0xB0, 0, 2, 1, 2, 3, 4, 5, 6]);
         assert_eq!(p[12], p[..12].iter().fold(0, |a, b| a ^ b));
     }
 
@@ -426,7 +426,7 @@ mod live {
         for c in [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]] {
             println!("{c:?}");
             for _ in 0..20 {
-                s.razer_color(to, c, 10);
+                s.razer_colors(to, &[c; 10]);
                 std::thread::sleep(Duration::from_millis(50));
             }
         }

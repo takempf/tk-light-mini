@@ -32,7 +32,7 @@ describe("lights off", () => {
 });
 
 describe("devices", () => {
-  it("adds once, defaults to the All zone", () => {
+  it("adds once, defaults to the average color", () => {
     const { addDevice } = useStore.getState();
     addDevice(lamp);
     addDevice(lamp);
@@ -40,7 +40,7 @@ describe("devices", () => {
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({
       id: lamp.id,
-      zone: "all",
+      color: "all",
       name: "H6199",
       brightness: 1,
       on: true,
@@ -59,14 +59,28 @@ describe("devices", () => {
     expect(toEngineConfig(useStore.getState()).devices).toHaveLength(2);
   });
 
-  it("sets zone, renames and removes", () => {
+  it("colors segments, and the whole light clears them", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setRazer(strip.id, true);
+    s.setSegments(strip.id, 4);
+    s.setColor(strip.id, "#ff0000", [1, 3]);
+    const segments = () => toEngineConfig(useStore.getState()).devices[0]?.segments;
+    expect(segments()).toEqual(["all", "#ff0000", "all", "#ff0000"]);
+    s.setColor(strip.id, "top");
+    expect(segments()).toEqual(["top", "top", "top", "top"]);
+    s.setRazer(strip.id, false);
+    expect(segments()).toEqual([]);
+  });
+
+  it("sets color, renames and removes", () => {
     const s = useStore.getState();
     s.addDevice(lamp);
     s.addDevice(strip);
-    s.setZone(lamp.id, "left");
+    s.setColor(lamp.id, "left");
     s.renameDevice(strip.id, "Desk");
     s.setDeviceBrightness(strip.id, 0.4);
-    expect(useStore.getState().devices.map((d) => [d.zone, d.name, d.brightness])).toEqual([
+    expect(useStore.getState().devices.map((d) => [d.color, d.name, d.brightness])).toEqual([
       ["left", "H6199", 1],
       ["all", "Desk", 0.4],
     ]);
@@ -113,7 +127,7 @@ describe("settings", () => {
       fps: 30,
       monitor: 0,
       tuning: DEFAULT_SETTINGS.tuning,
-      devices: [{ ip: lamp.ip, zone: "all", brightness: 1, razer: false, segments: 15 }],
+      devices: [{ ip: lamp.ip, color: "all", brightness: 1, razer: false, segments: [] }],
     });
   });
 });

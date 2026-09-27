@@ -1,7 +1,8 @@
 //! Capture -> extract -> smooth -> send loop, on its own low-priority thread.
 
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as _, IntoDeserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -13,23 +14,58 @@ use crate::capture::{CaptureError, Capturer};
 use crate::govee::{control_addr, Sender};
 use crate::zones::{extract, Rgb, Smoother, Tuning, Zone};
 
+/// Where a light or segment gets its color: a live screen zone, or fixed.
+/// From JSON as a zone name (`"top"`) or `"#rrggbb"`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Source {
+    Live(Zone),
+    Fixed(Rgb),
+}
+
+impl Source {
+    fn resolve(self, zones: &[Rgb; Zone::COUNT]) -> Rgb {
+        match self {
+            Source::Live(z) => zones[z.index()],
+            Source::Fixed(c) => c,
+        }
+    }
+}
+
+fn parse_hex(hex: &str) -> Option<Rgb> {
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([ch(0)?, ch(2)?, ch(4)?])
+}
+
+impl<'de> Deserialize<'de> for Source {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        if let Some(hex) = s.strip_prefix('#') {
+            return parse_hex(hex)
+                .map(Source::Fixed)
+                .ok_or_else(|| D::Error::custom(format!("bad color {s}")));
+        }
+        Zone::deserialize(IntoDeserializer::<D::Error>::into_deserializer(s.as_str()))
+            .map(Source::Live)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceTarget {
     pub ip: String,
-    pub zone: Zone,
+    /// The whole light's color.
+    pub color: Source,
     #[serde(default = "full")]
     pub brightness: f32,
     /// Experimental: stream colors in razer mode, which skips the device fade.
     #[serde(default)]
     pub razer: bool,
-    /// Segments to fill in razer mode.
-    #[serde(default = "one")]
-    pub segments: u8,
-}
-
-fn one() -> u8 {
-    1
+    /// Razer mode: one source per segment. Empty = one segment of `color`.
+    #[serde(default)]
+    pub segments: Vec<Source>,
 }
 
 fn full() -> f32 {
@@ -149,10 +185,10 @@ impl Engine {
 
 struct Target {
     addr: SocketAddr,
-    zone: usize,
+    color: Source,
     brightness: f32,
-    /// Segment count, when this light streams in razer mode.
-    razer: Option<u8>,
+    /// Segment sources, when this light streams in razer mode.
+    razer: Option<Vec<Source>>,
     /// Razer mode is switched on on the device.
     streaming: bool,
     last: Option<Rgb>,
@@ -164,15 +200,18 @@ fn build_targets(cfg: &EngineConfig, old: &[Target]) -> Vec<Target> {
         .iter()
         .filter_map(|d| {
             let addr = control_addr(&d.ip)?;
-            let razer = d.razer.then_some(d.segments.max(1));
+            let razer = d.razer.then(|| match d.segments.len() {
+                0 => vec![d.color],
+                _ => d.segments.clone(),
+            });
             let prev = old.iter().find(|t| t.addr == addr);
-            let same = prev.filter(|p| p.zone == d.zone.index() && p.razer == razer);
+            let same = prev.filter(|p| p.color == d.color && p.razer.is_some() == d.razer);
             Some(Target {
                 addr,
-                zone: d.zone.index(),
+                color: d.color,
                 brightness: d.brightness.max(0.0),
                 razer,
-                streaming: razer.is_some() && prev.is_some_and(|p| p.streaming),
+                streaming: d.razer && prev.is_some_and(|p| p.streaming),
                 last: same.and_then(|p| p.last),
                 sent_at: prev.map_or_else(Instant::now, |p| p.sent_at),
             })
@@ -237,6 +276,7 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     let mut last_tick = Instant::now();
     let mut last_preview = Instant::now() - PREVIEW_INTERVAL;
     let mut turned_on: Vec<SocketAddr> = Vec::new();
+    let mut segment_colors: Vec<Rgb> = Vec::new();
 
     emit_status(None);
 
@@ -316,19 +356,24 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 t.last = None;
                 continue;
             }
-            let c = scale(colors[t.zone], t.brightness);
-            if let Some(n) = t.razer {
+            if let Some(segments) = &t.razer {
                 if !t.streaming {
                     sender.razer_mode(t.addr, true);
                     t.streaming = true;
                 }
+                segment_colors.clear();
+                segment_colors.extend(
+                    segments
+                        .iter()
+                        .map(|s| scale(s.resolve(&colors), t.brightness)),
+                );
                 // Every frame: there's no fade to hide gaps, and it keeps the
                 // stream alive.
-                sender.razer_color(t.addr, c, n);
-                t.last = Some(c);
+                sender.razer_colors(t.addr, &segment_colors);
                 t.sent_at = tick;
                 continue;
             }
+            let c = scale(t.color.resolve(&colors), t.brightness);
             let due = t.last.is_none_or(|l| changed(l, c)) || t.sent_at.elapsed() >= KEEPALIVE;
             if due {
                 sender.color(t.addr, c);
@@ -377,12 +422,13 @@ mod tests {
 
     #[test]
     fn config_deserializes_from_frontend_shape() {
-        let json = r#"{"enabled":true,"fps":30,"monitor":0,
+        let json = r##"{"enabled":true,"fps":30,"monitor":0,
             "tuning":{"saturation":1.2,"brightness":0.9,"depth":0.2,"smoothing":0.4},
-            "devices":[{"ip":"192.168.1.9","zone":"left"},
-                {"ip":"192.168.1.8","zone":"top","brightness":0.5}]}"#;
+            "devices":[{"ip":"192.168.1.9","color":"left"},
+                {"ip":"192.168.1.8","color":"#ff8000","brightness":0.5}]}"##;
         let c: EngineConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(c.devices[0].zone, Zone::Left);
+        assert_eq!(c.devices[0].color, Source::Live(Zone::Left));
+        assert_eq!(c.devices[1].color, Source::Fixed([255, 128, 0]));
         assert_eq!(c.devices[0].brightness, 1.0, "defaults to full");
         assert_eq!(c.devices[1].brightness, 0.5);
         assert_eq!(c.tuning.depth, 0.2);
@@ -393,33 +439,49 @@ mod tests {
         let mut cfg = EngineConfig::default();
         cfg.devices.push(DeviceTarget {
             ip: "10.0.0.2".into(),
-            zone: Zone::Top,
+            color: Source::Live(Zone::Top),
             brightness: 1.0,
             razer: false,
-            segments: 1,
+            segments: Vec::new(),
         });
         cfg.devices.push(DeviceTarget {
             ip: "bad".into(),
-            zone: Zone::Top,
+            color: Source::Live(Zone::Top),
             brightness: 1.0,
             razer: false,
-            segments: 1,
+            segments: Vec::new(),
         });
         let mut t = build_targets(&cfg, &[]);
         assert_eq!(t.len(), 1);
         t[0].last = Some([1, 2, 3]);
         let t2 = build_targets(&cfg, &t);
         assert_eq!(t2[0].last, Some([1, 2, 3]));
-        cfg.devices[0].zone = Zone::All;
+        cfg.devices[0].color = Source::Fixed([9, 9, 9]);
         let t3 = build_targets(&cfg, &t2);
-        assert_eq!(t3[0].last, None, "zone change forces resend");
+        assert_eq!(t3[0].last, None, "color change forces resend");
+    }
+
+    #[test]
+    fn bad_colors_are_rejected() {
+        for bad in ["\"#12345\"", "\"#gg0000\"", "\"middle\""] {
+            assert!(serde_json::from_str::<Source>(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn sources_resolve() {
+        let mut zones = [[0; 3]; Zone::COUNT];
+        zones[Zone::Center.index()] = [1, 2, 3];
+        assert_eq!(Source::Live(Zone::Center).resolve(&zones), [1, 2, 3]);
+        assert_eq!(Source::Fixed([7, 8, 9]).resolve(&zones), [7, 8, 9]);
     }
 
     fn razer_cfg(razer: bool) -> EngineConfig {
         serde_json::from_str(&format!(
-            r#"{{"enabled":true,"fps":30,"monitor":0,"tuning":{{}},
-            "devices":[{{"ip":"10.0.0.2","zone":"all","razer":{razer},"segments":10}},
-                {{"ip":"10.0.0.3","zone":"all"}}]}}"#
+            r##"{{"enabled":true,"fps":30,"monitor":0,"tuning":{{}},
+            "devices":[{{"ip":"10.0.0.2","color":"all","razer":{razer},
+                    "segments":["top","top","#ff0000"]}},
+                {{"ip":"10.0.0.3","color":"all"}}]}}"##
         ))
         .unwrap()
     }
@@ -427,7 +489,9 @@ mod tests {
     #[test]
     fn razer_is_opt_in_per_light() {
         let t = build_targets(&razer_cfg(true), &[]);
-        assert_eq!(t[0].razer, Some(10));
+        let segs = t[0].razer.as_ref().unwrap();
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[2], Source::Fixed([255, 0, 0]));
         assert_eq!(t[1].razer, None);
         assert!(!t[0].streaming, "switched on by the loop");
     }

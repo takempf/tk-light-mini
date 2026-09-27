@@ -9,8 +9,8 @@ import {
   type GoveeDevice,
   type MonitorInfo,
   type Settings,
+  type Source,
   type Tuning,
-  type Zone,
   type ZoneColors,
 } from "./lib/types";
 
@@ -36,7 +36,8 @@ interface AppState {
   loadMonitors: () => Promise<void>;
   addDevice: (d: GoveeDevice) => void;
   removeDevice: (id: string) => void;
-  setZone: (id: string, zone: Zone) => void;
+  /** Color the whole light, or just `segments` (razer mode) if given. */
+  setColor: (id: string, color: Source, segments?: readonly number[]) => void;
   renameDevice: (id: string, name: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
   /** Switch one light on or off, right away and for sync. */
@@ -106,7 +107,7 @@ export const useStore = create<AppState>()(
                     ...d,
                     name: d.sku || d.id,
                     on: true,
-                    zone: "all",
+                    color: "all",
                     brightness: 1,
                     razer: false,
                   },
@@ -114,8 +115,16 @@ export const useStore = create<AppState>()(
               },
         ),
       removeDevice: (id) => set((s) => ({ devices: s.devices.filter((d) => d.id !== id) })),
-      setZone: (id, zone) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, zone } : d)) })),
+      setColor: (id, color, segments = []) =>
+        set((s) => ({
+          devices: s.devices.map((d) => {
+            if (d.id !== id) return d;
+            if (segments.length === 0) return { ...d, color, segmentColors: undefined };
+            const segmentColors = [...(d.segmentColors ?? [])];
+            for (const i of segments) segmentColors[i] = color;
+            return { ...d, segmentColors: Array.from(segmentColors, (c) => c ?? null) };
+          }),
+        })),
       renameDevice: (id, name) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) })),
       setDeviceBrightness: (id, brightness) =>
@@ -143,7 +152,7 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "tk-light-mini",
-      version: 5,
+      version: 6,
       migrate: (old, version) => {
         const s = old as { devices?: AddedDevice[] };
         if (version < 2 && s.devices) {
@@ -161,12 +170,25 @@ export const useStore = create<AppState>()(
             }),
           );
         }
+        if (version < 6 && s.devices) {
+          // `zone` became `color`, which can also be a fixed color.
+          s.devices = s.devices.map(({ zone, ...d }: AddedDevice & { zone?: Source }) => ({
+            ...d,
+            color: d.color ?? zone ?? "all",
+          }));
+        }
         return s as AppState;
       },
       partialize: (s) => ({ devices: s.devices, enabled: s.enabled, settings: s.settings }),
     },
   ),
 );
+
+export const segmentCount = (d: AddedDevice) => d.segments ?? defaultSegments(d.sku);
+
+/** Each segment's color, in razer mode. */
+export const segmentSources = (d: AddedDevice): Source[] =>
+  Array.from({ length: segmentCount(d) }, (_, i) => d.segmentColors?.[i] ?? d.color);
 
 /** Live zone colors, split out so 10 Hz updates only re-render the preview. */
 export const useZoneColors = create<{ colors: ZoneColors | null }>(() => ({ colors: null }));
@@ -181,12 +203,12 @@ export function toEngineConfig(
     tuning: s.settings.tuning,
     devices: s.devices
       .filter((d) => d.on)
-      .map(({ ip, zone, brightness, sku, razer, segments }) => ({
-        ip,
-        zone,
-        brightness,
-        razer,
-        segments: segments ?? defaultSegments(sku),
+      .map((d) => ({
+        ip: d.ip,
+        color: d.color,
+        brightness: d.brightness,
+        razer: d.razer,
+        segments: d.razer ? segmentSources(d) : [],
       })),
   };
 }

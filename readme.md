@@ -8,14 +8,14 @@ It's built to stay out of the way. If you're gaming, it shouldn't cost you frame
 
 1. In the Govee Home app, turn on **LAN Control** for each light, then unplug the light for about 10 seconds to restart it.
 2. Open the app. It scans your network on launch. Click **Add** next to a light.
-3. Pick a zone for each light: **Top**, **Left**, **Bottom**, **Right** or **All**. A strip behind the top of the TV gets Top, a lamp to the left gets Left, and so on.
+3. Pick a color for each light. The **Screen** colors follow the picture: **Top**, **Right**, **Bottom**, **Left**, **Center** (inside the edges) or **Average** (the whole screen). A strip behind the top of the TV gets Top, a lamp to the left gets Left, and so on. The **Rainbow** colors stay fixed.
 4. Flip the switch in the title bar to **Syncing**.
 
 Turning sync off leaves the lights on their last color. **Lights off**, next to the switch, stops syncing and switches them off. Turning sync back on turns them on again.
 
 Each light has its own on/off switch. An off light is switched off and left out of syncing until you turn it back on.
 
-Click a light to open it. Inside you can rename it, pick its zone, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). The Tuning sliders adjust brightness, saturation, smoothing (how slowly colors fade), edge depth (how far in from the screen edge to sample) and sample rate.
+Click a light to open it. Inside you can rename it, pick its color, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). The Tuning sliders adjust brightness, saturation, smoothing (how slowly colors fade), edge depth (how far in from the screen edge to sample) and sample rate.
 
 Your lights and settings are saved between launches.
 
@@ -82,7 +82,9 @@ cargo test -- --ignored live_scan_raw --nocapture   # print every Govee scan rep
 
 Some lights fade slowly between colors on their own (the H61F5 takes about 3 seconds), so sync lags behind the picture.
 
-Each light's panel has a **Razer streaming** switch. With it on, the app talks to the light in the mode Govee's DreamView and Razer Chroma use (undocumented, same as [LedFx](https://github.com/LedFx/LedFx)). Colors land at once, with no fade, so set Smoothing to taste. Set **Segments** to the light's segment count: every segment gets the light's zone color. Lights that don't support it just stop changing, so switch it back off.
+Each light's panel has a **Razer streaming** switch. With it on, the app talks to the light in the mode Govee's DreamView and Razer Chroma use (undocumented, same as [LedFx](https://github.com/LedFx/LedFx)). Colors land at once, with no fade, so set Smoothing to taste. Lights that don't support it just stop changing, so switch it back off.
+
+In razer mode each segment can have its own color. Set **Segments** to the light's segment count, and a bar shows one cell per segment. Click cells to select them (shift-click for a range), then pick a color: it goes to just those segments. With nothing selected, the color goes to the whole light and replaces any per-segment colors. Screen colors keep following the picture.
 
 When sync stops or the switch goes off, the light goes back to its normal mode.
 
@@ -101,4 +103,4 @@ cargo test -- --ignored live_pt_walk --nocapture    # ptReal: one segment walks 
 
 - Windows only for now. Capture uses DXGI.
 - HDR screens get converted to 8-bit by Windows, so colors can look a bit flat with HDR on.
-- One color per light. Strips with separately controllable segments aren't used segment by segment yet.
+- Per-segment colors need razer streaming. Other lights get one color.

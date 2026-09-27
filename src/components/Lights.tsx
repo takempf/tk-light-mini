@@ -1,64 +1,60 @@
+import { useState } from "react";
 import { api } from "../lib/api";
-import {
-  type AddedDevice,
-  defaultSegments,
-  type GoveeDevice,
-  type Rgb,
-  ZONES,
-  type Zone,
-} from "../lib/types";
-import { useStore } from "../store";
-import { Accordion, Button, Eyebrow, Input, Panel, Switch, Toggle, ToggleGroup } from "../ui";
+import { sourceLabel } from "../lib/colors";
+import type { AddedDevice, GoveeDevice, Rgb, Source } from "../lib/types";
+import { segmentSources, useStore } from "../store";
+import { Accordion, Button, Eyebrow, Input, Panel, Switch } from "../ui";
+import { ColorPicker } from "./ColorPicker";
+import { SegmentBar } from "./SegmentBar";
 import { pct, Slider } from "./Slider";
-import { css, useZoneColor } from "./ZonePreview";
+import { css, useSourceColor } from "./ZonePreview";
 
-const ZONE_LABEL: Record<Zone, string> = {
-  top: "Top",
-  left: "Left",
-  bottom: "Bottom",
-  right: "Right",
-  all: "All",
-};
-
-function ZoneOption({ zone }: { zone: Zone }) {
-  const color = useZoneColor(zone);
-  return (
-    <Toggle value={zone}>
-      <span className="swatch" style={{ background: css(color) }} />
-      {ZONE_LABEL[zone]}
-    </Toggle>
-  );
-}
+/** The one source all of `sources` share, if they do. */
+const shared = (sources: Source[]) =>
+  sources.every((s) => s === sources[0]) ? sources[0] : undefined;
 
 function LightRow({ device }: { device: AddedDevice }) {
   const rename = useStore((s) => s.renameDevice);
   const remove = useStore((s) => s.removeDevice);
-  const setZone = useStore((s) => s.setZone);
+  const setColor = useStore((s) => s.setColor);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
   const setPower = useStore((s) => s.setPower);
   const setRazer = useStore((s) => s.setRazer);
   const setSegments = useStore((s) => s.setSegments);
-  const color = useZoneColor(device.zone);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const name = device.name || device.sku;
+  const sources = device.razer ? segmentSources(device) : [];
+  const selected = [...picked].filter((i) => i < sources.length).sort((a, b) => a - b);
+  const mixed = sources.some((s) => s !== device.color);
+  const color = useSourceColor(device.color);
   const dot = device.on
     ? (color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as Rgb | undefined)
     : undefined;
+  const target =
+    selected.length === 0
+      ? "Whole light"
+      : selected.length === 1
+        ? `Segment ${(selected[0] ?? 0) + 1}`
+        : `${selected.length} segments`;
   return (
     <Accordion.Item value={device.id} className="light" data-off={device.on ? undefined : ""}>
       <div className="light-head">
         <Accordion.Trigger className="light-trigger">
           <span className="dot" style={{ background: css(dot) }} />
           <span className="light-title">
-            <span className="light-name">{device.name || device.sku}</span>
+            <span className="light-name">{name}</span>
             <span className="meta">
               {device.sku} · {device.ip}
             </span>
           </span>
           <span className="meta light-summary">
-            {device.on ? `${ZONE_LABEL[device.zone]} · ${pct(device.brightness)}` : "Off"}
+            {device.on
+              ? `${mixed ? "Segments" : sourceLabel(device.color)} · ${pct(device.brightness)}`
+              : "Off"}
           </span>
         </Accordion.Trigger>
         <Switch
-          aria-label={`Power for ${device.name || device.sku}`}
+          aria-label={`Power for ${name}`}
           checked={device.on}
           onCheckedChange={(on: boolean) => setPower(device.id, on)}
         />
@@ -71,17 +67,38 @@ function LightRow({ device }: { device: AddedDevice }) {
             value={device.name}
             onChange={(e) => rename(device.id, e.target.value)}
           />
-          <ToggleGroup
-            size="sm"
-            className="zones"
-            aria-label={`Zone for ${device.name}`}
-            value={[device.zone]}
-            onValueChange={([z]) => z && setZone(device.id, z as Zone)}
-          >
-            {ZONES.map((z) => (
-              <ZoneOption key={z} zone={z} />
-            ))}
-          </ToggleGroup>
+          <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
+            Razer streaming (experimental)
+          </Switch>
+          {device.razer && (
+            <>
+              <Slider
+                label="Segments"
+                value={sources.length}
+                min={1}
+                max={100}
+                step={1}
+                format={String}
+                onChange={(v) => setSegments(device.id, v)}
+              />
+              <SegmentBar
+                label={`Segments of ${name}`}
+                sources={sources}
+                selected={new Set(selected)}
+                onSelect={setPicked}
+              />
+            </>
+          )}
+          <div className="stack picker-block">
+            <span className="meta">Color · {target}</span>
+            <ColorPicker
+              label={`Color for ${name}`}
+              value={
+                selected.length ? shared(selected.map((i) => sources[i] as Source)) : device.color
+              }
+              onPick={(c) => setColor(device.id, c, selected)}
+            />
+          </div>
           <Slider
             label="Brightness"
             value={device.brightness}
@@ -91,20 +108,6 @@ function LightRow({ device }: { device: AddedDevice }) {
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
-          <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
-            Razer streaming (experimental)
-          </Switch>
-          {device.razer && (
-            <Slider
-              label="Segments"
-              value={device.segments ?? defaultSegments(device.sku)}
-              min={1}
-              max={100}
-              step={1}
-              format={String}
-              onChange={(v) => setSegments(device.id, v)}
-            />
-          )}
           <div className="light-actions">
             <Button size="sm" onClick={() => api.identifyDevice(device.ip).catch(() => {})}>
               Identify

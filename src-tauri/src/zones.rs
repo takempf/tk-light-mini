@@ -1,4 +1,4 @@
-//! Turns a small downscaled screen frame into 5 "wall paint" colors.
+//! Turns a small downscaled screen frame into 6 "wall paint" colors.
 //!
 //! Goals: the light should look like the screen is spilling onto the wall.
 //! - Ignore letterbox / pillarbox bars.
@@ -19,11 +19,14 @@ pub enum Zone {
     Left,
     Bottom,
     Right,
+    /// The whole screen.
     All,
+    /// Inside the edge bands.
+    Center,
 }
 
 impl Zone {
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 
     pub fn index(self) -> usize {
         match self {
@@ -32,6 +35,7 @@ impl Zone {
             Zone::Bottom => 2,
             Zone::Right => 3,
             Zone::All => 4,
+            Zone::Center => 5,
         }
     }
 }
@@ -216,7 +220,7 @@ fn content_rect(frame: &Frame) -> (usize, usize, usize, usize) {
     (x0, y0, x1, y1)
 }
 
-/// Extract colors in `Zone::index` order: top, left, bottom, right, all.
+/// Extract colors in `Zone::index` order: top, left, bottom, right, all, center.
 pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
     if frame.width == 0 || frame.height == 0 {
         return [[0; 3]; Zone::COUNT];
@@ -257,6 +261,7 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
             let left = x < left_end;
             let right = x >= right_start;
             if !(top || bottom || left || right) {
+                acc[5].add(lin, v_lin, w);
                 continue;
             }
             let mut side = 0;
@@ -275,16 +280,10 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
             acc[side].add(lin, v_lin, w);
         }
     }
-    [
-        acc[0].finish(t),
-        acc[1].finish(t),
-        acc[2].finish(t),
-        acc[3].finish(t),
-        acc[4].finish(t),
-    ]
+    acc.map(|a| a.finish(t))
 }
 
-/// Frame-rate independent exponential smoothing for the 5 zone colors.
+/// Frame-rate independent exponential smoothing for the zone colors.
 #[derive(Clone, Debug, Default)]
 pub struct Smoother {
     state: [[f32; 3]; Zone::COUNT],
@@ -377,7 +376,7 @@ mod tests {
     #[test]
     fn black_is_black() {
         let img = Img::new(64, 36, [0, 0, 0]);
-        assert_eq!(extract(&img.frame(), &NEUTRAL), [[0; 3]; 5]);
+        assert_eq!(extract(&img.frame(), &NEUTRAL), [[0; 3]; Zone::COUNT]);
     }
 
     #[test]
@@ -425,6 +424,20 @@ mod tests {
         let (top, left) = (z[Zone::Top.index()], z[Zone::Left.index()]);
         assert!(top[0] > top[2] + 20, "{top:?}");
         assert!(left[2] > left[0] + 20, "{left:?}");
+    }
+
+    #[test]
+    fn center_is_inside_the_bands() {
+        let mut img = Img::new(100, 100, [30, 30, 30]);
+        img.fill(40, 40, 60, 60, [0, 255, 0]);
+        let t = Tuning {
+            depth: 0.2,
+            ..NEUTRAL
+        };
+        let z = extract(&img.frame(), &t);
+        let c = z[Zone::Center.index()];
+        assert!(c[1] > c[0] + 50, "{c:?}");
+        assert!(z[Zone::Top.index()][1] < 40, "edges don't see it: {z:?}");
     }
 
     #[test]
@@ -482,8 +495,8 @@ mod tests {
     #[test]
     fn smoother_instant_when_zero() {
         let mut s = Smoother::default();
-        let a = [[0u8; 3]; 5];
-        let b = [[255u8; 3]; 5];
+        let a = [[0u8; 3]; Zone::COUNT];
+        let b = [[255u8; 3]; Zone::COUNT];
         s.update(&a, 0.033, 0.0);
         assert_eq!(s.update(&b, 0.033, 0.0), b);
     }
@@ -491,8 +504,8 @@ mod tests {
     #[test]
     fn smoother_converges() {
         let mut s = Smoother::default();
-        s.update(&[[0; 3]; 5], 0.033, 0.5);
-        let target = [[255; 3]; 5];
+        s.update(&[[0; 3]; Zone::COUNT], 0.033, 0.5);
+        let target = [[255; 3]; Zone::COUNT];
         let first = s.update(&target, 0.033, 0.5)[0][0];
         assert!(first > 0 && first < 255);
         let mut last = first;
