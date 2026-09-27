@@ -1,0 +1,5 @@
+/* The faces tk-design-system's base theme names. Its own fonts.css also loads
+   every other theme's faces plus Korean and emoji, which would bloat the app. */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/archivo/wdth.css";

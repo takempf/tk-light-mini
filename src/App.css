@@ -1,0 +1,312 @@
+/*
+  Layout on top of tk-design-system's base theme. Everything reads its tokens.
+  Kept cheap to render: no blur, no backdrop-filter, no infinite animations.
+*/
+:root {
+  --titlebar-h: 2.25rem;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+}
+
+/* Title bar ------------------------------------------------------------- */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-4);
+  height: var(--titlebar-h);
+  padding-left: var(--tk-space-4);
+  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+  background: var(--tk-surface);
+  color: var(--tk-fg-subtle);
+  user-select: none;
+}
+.titlebar[data-focused] {
+  color: var(--tk-fg-muted);
+}
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-2);
+  /* Let clicks reach the drag region underneath. */
+  pointer-events: none;
+  font-family: var(--tk-label-font);
+  font-size: var(--tk-text-sm);
+  font-weight: var(--tk-label-weight);
+  font-stretch: var(--tk-label-stretch);
+  letter-spacing: var(--tk-label-tracking);
+  text-transform: var(--tk-label-transform);
+}
+.titlebar-brand .tk-logo {
+  color: var(--tk-label);
+}
+.titlebar:not([data-focused]) .tk-logo {
+  color: inherit;
+}
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-3);
+  margin-left: auto;
+  font-size: var(--tk-text-sm);
+}
+.titlebar-actions .tk-button {
+  min-height: 1.6rem;
+}
+.titlebar-actions .tk-switch {
+  --_w: 2.1rem;
+  --_h: 1.15rem;
+}
+
+.window-controls {
+  display: flex;
+  align-self: stretch;
+}
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  transition: background-color var(--tk-duration-1) var(--tk-ease-out);
+}
+.window-controls .tk-icon {
+  stroke-width: 1;
+}
+.window-controls button:hover {
+  background: var(--tk-surface-hover);
+  color: var(--tk-fg);
+}
+.window-controls button:active {
+  background: var(--tk-border-subtle);
+}
+.window-controls .close:hover,
+.window-controls .close:active {
+  background: var(--tk-danger);
+  color: var(--tk-fg-bright);
+}
+.window-controls button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Page ------------------------------------------------------------------ */
+
+.content {
+  overflow: auto;
+  padding: var(--tk-space-5) var(--tk-space-5) var(--tk-space-8);
+}
+
+.grid {
+  display: grid;
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--tk-space-4);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-4);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tk-control-h-sm);
+  margin-block: calc(-1 * var(--tk-space-2));
+}
+
+.banner {
+  max-width: 1100px;
+  margin: 0 auto var(--tk-space-4);
+  padding: var(--tk-space-3) var(--tk-space-4);
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius);
+  font-size: var(--tk-text-sm);
+}
+.banner.error {
+  border-color: color-mix(in oklab, var(--tk-danger) 50%, transparent);
+  background: var(--tk-danger-soft);
+}
+.banner.hint {
+  background: var(--tk-surface-raised);
+}
+.error {
+  color: var(--tk-danger);
+}
+.empty,
+.hint {
+  color: var(--tk-fg-muted);
+}
+.empty {
+  font-size: var(--tk-text-sm);
+}
+.meta {
+  color: var(--tk-fg-subtle);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Preview: a TV on a wall. Edge bands are the zone colors. -------------- */
+
+.wall {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius-lg);
+  background: var(--tk-surface);
+}
+.edge {
+  position: absolute;
+}
+.edge-top,
+.edge-bottom {
+  left: 14%;
+  right: 14%;
+  height: 16%;
+}
+.edge-top {
+  top: 0;
+}
+.edge-bottom {
+  bottom: 0;
+}
+.edge-left,
+.edge-right {
+  top: 16%;
+  bottom: 16%;
+  width: 14%;
+}
+.edge-left {
+  left: 0;
+}
+.edge-right {
+  right: 0;
+}
+.screen {
+  position: absolute;
+  inset: 22% 20%;
+  display: grid;
+  place-items: center;
+  background: #050506;
+  box-shadow: 0 0 0 3px #000;
+  color: var(--tk-fg-subtle);
+  font-family: var(--tk-label-font);
+  font-size: var(--tk-text-xs);
+  font-weight: var(--tk-label-weight);
+  font-stretch: var(--tk-label-stretch);
+  letter-spacing: var(--tk-label-tracking);
+  text-transform: var(--tk-label-transform);
+}
+
+/* Lights --------------------------------------------------------------- */
+
+.lights {
+  border-top: 0;
+}
+.lights .light:last-child {
+  border-bottom: 0;
+}
+.light-trigger,
+.light.found {
+  padding-block: var(--tk-space-3);
+}
+.lights .light:first-child .light-trigger,
+.lights .light.found:first-child {
+  padding-top: 0;
+}
+.lights .light.found:last-child {
+  padding-bottom: 0;
+}
+.light-trigger > span:first-child {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--tk-space-3);
+  min-width: 0;
+}
+.dot,
+.swatch {
+  flex: none;
+  border-radius: var(--tk-knob-radius);
+  background: var(--tk-border);
+}
+.dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  box-shadow: 0 0 0 var(--tk-border-width) var(--tk-border-subtle);
+}
+.swatch {
+  width: 0.6rem;
+  height: 0.6rem;
+}
+.light-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.light-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.light.found {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-3);
+}
+.light.found .dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--tk-border-width) var(--tk-border-strong);
+}
+.light.found .light-name {
+  color: var(--tk-fg-muted);
+}
+.light-summary {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.light-body {
+  gap: var(--tk-space-3);
+  padding-left: calc(0.8rem + var(--tk-space-3));
+  color: var(--tk-fg);
+}
+.zones,
+.zones > .tk-toggle-lit {
+  flex-wrap: wrap;
+}
+.zones {
+  max-width: 100%;
+}
+.light-actions {
+  display: flex;
+  gap: var(--tk-space-2);
+}
