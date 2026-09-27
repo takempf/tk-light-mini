@@ -19,10 +19,15 @@ export interface AddedDevice extends GoveeDevice {
   brightness: number;
   /** Experimental: mix in the white LEDs (segments over ptReal). */
   whiteLeds: boolean;
+  /** Segments on the strip, for white LEDs. Unset = the SKU's default. */
+  segments?: number;
 }
 
-/** SKUs with white LEDs the engine can drive. Keep in sync with `ptreal::profile`. */
-export const WHITE_LED_SKUS: ReadonlySet<string> = new Set(["H61F5"]);
+/**
+ * SKUs with white LEDs the engine can drive, with their default segment count.
+ * Keep in sync with `ptreal::profile`.
+ */
+export const WHITE_LED_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10 };
 
 export interface Tuning {
   saturation: number;
@@ -54,5 +59,12 @@ export interface EngineConfig {
   fps: number;
   monitor: number;
   tuning: Tuning;
-  devices: { ip: string; zone: Zone; brightness: number; sku: string; whiteLeds: boolean }[];
+  devices: {
+    ip: string;
+    zone: Zone;
+    brightness: number;
+    sku: string;
+    whiteLeds: boolean;
+    segments: number;
+  }[];
 }

@@ -31,10 +31,10 @@ pub struct Profile {
 /// Devices with white LEDs that we drive through `ptReal`.
 pub fn profile(sku: &str) -> Option<Profile> {
     match sku {
-        // Strip Light 2 Pro, 5 m: RGBWWIC, 10 segments/m, 2700-6500 K.
-        // 6500 K is closest to screen white (D65).
+        // Strip Light 2 Pro, 5 m: RGBWWIC, 2700-6500 K. Probing a ~4.5 m
+        // strip lit 10 segments. 6500 K is closest to screen white (D65).
         "H61F5" => Some(Profile {
-            segments: 50,
+            segments: 10,
             kelvin: 6500,
         }),
         _ => None,
@@ -286,7 +286,7 @@ mod tests {
         };
         assert_eq!(frames(color_only, p).len(), 2);
         let both = Mix {
-            whites: 10,
+            whites: 5,
             ..color_only
         };
         assert_eq!(frames(both, p).len(), 4);
@@ -326,15 +326,23 @@ mod live {
         pause();
     }
 
-    /// Walks one lit segment along the strip. Count them to check `segments`.
+    /// Walks one lit segment along the strip, 1 s per step. Count the steps to
+    /// check `segments`. Blue is the second frame, so seeing it also shows
+    /// multi-frame messages work. `GOVEE_WALK` sets how far (default 20).
     #[test]
     #[ignore]
     fn live_pt_walk() {
         let a = addr();
+        let steps: u32 = std::env::var("GOVEE_WALK").map_or(20, |v| v.parse().unwrap());
         let mut s = Sender::new().unwrap();
         s.turn(a, true);
         let all = u64::MAX >> 8;
-        for i in 0..56 {
+        s.pt_real(
+            a,
+            &[segment_color([0; 3], all), segment_brightness(100, all)],
+        );
+        std::thread::sleep(Duration::from_secs(2));
+        for i in 0..steps.min(56) {
             println!("segment {i}");
             s.pt_real(
                 a,
@@ -343,8 +351,105 @@ mod live {
                     segment_color([0, 80, 255], 1 << i),
                 ],
             );
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_secs(1));
         }
+    }
+
+    /// Frame and rate limits. Each phase resets to white, then sends six
+    /// whole-strip colors: red, green, blue, yellow, magenta, cyan. The color it
+    /// settles on is the last frame the device took.
+    ///   1. one message, six frames
+    ///   2. six messages, 100 ms apart
+    ///   3. six messages, 400 ms apart
+    #[test]
+    #[ignore]
+    fn live_pt_limits() {
+        let a = addr();
+        let mut s = Sender::new().unwrap();
+        s.turn(a, true);
+        let all = u64::MAX >> 8;
+        let colors: Vec<Frame> = [
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [255, 255, 0],
+            [255, 0, 255],
+            [0, 255, 255],
+        ]
+        .map(|c| segment_color(c, all))
+        .into();
+        let reset = |s: &mut Sender| {
+            s.pt_real(a, &[segment_white(6500, kelvin_rgb(6500), all)]);
+            std::thread::sleep(Duration::from_secs(3));
+        };
+        let hold = || std::thread::sleep(Duration::from_secs(6));
+
+        println!("phase 1: one message, six frames");
+        reset(&mut s);
+        s.pt_real(a, &colors);
+        hold();
+        for gap in [100, 400] {
+            println!("phase: six messages, {gap} ms apart");
+            reset(&mut s);
+            for f in &colors {
+                s.pt_real(a, &[*f]);
+                std::thread::sleep(Duration::from_millis(gap));
+            }
+            hold();
+        }
+    }
+
+    /// Static ruler to count segments: 0-4 red, 5-9 green, 10-14 blue,
+    /// 15-19 white, 20+ dark.
+    #[test]
+    #[ignore]
+    fn live_pt_ruler() {
+        let a = addr();
+        let mut s = Sender::new().unwrap();
+        s.turn(a, true);
+        let all = u64::MAX >> 8;
+        // One frame per message: a 6-frame message dropped the last frames.
+        for f in [
+            segment_brightness(100, all),
+            segment_color([0; 3], all),
+            segment_color([255, 0, 0], 0x1f),
+            segment_color([0, 255, 0], 0x1f << 5),
+            segment_color([0, 0, 255], 0x1f << 10),
+            segment_white(6500, kelvin_rgb(6500), 0x1f << 15),
+        ] {
+            s.pt_real(a, &[f]);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        std::thread::sleep(Duration::from_secs(20));
+    }
+
+    /// Does the device apply every frame in one `ptReal` message, or only the
+    /// first? Dark strip, then one message: segments 0-9 blue, 20-29 green.
+    #[test]
+    #[ignore]
+    fn live_pt_multi() {
+        let a = addr();
+        let mut s = Sender::new().unwrap();
+        s.turn(a, true);
+        let all = u64::MAX >> 8;
+        s.pt_real(
+            a,
+            &[segment_color([0; 3], all), segment_brightness(100, all)],
+        );
+        std::thread::sleep(Duration::from_secs(3));
+        println!("one message: first 10 blue, 20-29 green");
+        s.pt_real(
+            a,
+            &[
+                segment_color([0, 0, 255], 0x3ff),
+                segment_color([0, 255, 0], 0x3ff << 20),
+            ],
+        );
+        std::thread::sleep(Duration::from_secs(5));
+        println!("separate messages: 30-39 red, 40-49 white");
+        s.pt_real(a, &[segment_color([255, 0, 0], 0x3ff << 30)]);
+        s.pt_real(a, &[segment_white(6500, kelvin_rgb(6500), 0x3ff << 40)]);
+        std::thread::sleep(Duration::from_secs(5));
     }
 
     /// True tandem? White mode, but with a color in the RGB bytes. If the

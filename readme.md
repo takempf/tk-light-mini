@@ -80,17 +80,21 @@ cargo test -- --ignored live_scan_raw --nocapture   # print every Govee scan rep
 
 Some lights have real white LEDs next to the color ones. The normal LAN color command only drives the color LEDs, so whites get mixed from red, green and blue.
 
-On supported lights (only the **H61F5** for now), the light's panel has a **White LEDs** switch. With it on, the app uses Govee's undocumented `ptReal` command to set each segment on its own. It makes some segments white and the rest color, in the right ratio, so from a step back the strip shows the screen's color with real white mixed in. Gray scenes go all white. Vivid scenes use no white.
+On supported lights (only the **H61F5** for now), the light's panel has a **White LEDs** switch, plus a **Segments** slider for strips that were cut (default 10). With it on, the app uses Govee's undocumented `ptReal` command to set each segment on its own. It makes some segments white and the rest color, in the right ratio, so from a step back the strip shows the screen's color with real white mixed in. Gray scenes go all white. Vivid scenes use no white.
 
 This is a test. It uses an undocumented API, and the packet layout comes from other SKUs (H61E0, H6046). Probes, with the light's IP in `GOVEE_IP`:
 
 ```sh
 cd src-tauri
 cargo test -- --ignored live_pt_split --nocapture       # half red, half white
-cargo test -- --ignored live_pt_walk --nocapture        # count the segments
+cargo test -- --ignored live_pt_walk --nocapture        # count the segments, 1 s per step
+cargo test -- --ignored live_pt_ruler --nocapture       # segments 0-4 red, 5-9 green, 10-14 blue, 15-19 white
+cargo test -- --ignored live_pt_limits --nocapture      # frames per message, messages per second
 cargo test -- --ignored live_pt_tandem --nocapture      # can one segment light white and color at once?
 cargo test -- --ignored live_pt_white_fade --nocapture  # does segment brightness dim white?
 ```
+
+Found on a ~4.5 m H61F5: segment + white mode work, 10 segments lit, six frames per message and messages 100 ms apart all get through. The strip fades smoothly between every change by itself, so keep Smoothing low for it.
 
 ## Limits
 

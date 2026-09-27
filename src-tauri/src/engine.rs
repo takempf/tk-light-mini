@@ -26,6 +26,9 @@ pub struct DeviceTarget {
     /// Experimental: mix in the white LEDs via `ptReal`, if the SKU has a profile.
     #[serde(default)]
     pub white_leds: bool,
+    /// Segment count override for `ptReal` lights. 0 = the SKU's default.
+    #[serde(default)]
+    pub segments: u8,
 }
 
 fn full() -> f32 {
@@ -161,7 +164,18 @@ fn build_targets(cfg: &EngineConfig, old: &[Target]) -> Vec<Target> {
         .iter()
         .filter_map(|d| {
             let addr = control_addr(&d.ip)?;
-            let profile = d.white_leds.then(|| ptreal::profile(&d.sku)).flatten();
+            let profile = d
+                .white_leds
+                .then(|| ptreal::profile(&d.sku))
+                .flatten()
+                .map(|p| Profile {
+                    segments: if d.segments > 0 {
+                        d.segments.min(56)
+                    } else {
+                        p.segments
+                    },
+                    ..p
+                });
             let prev = old
                 .iter()
                 .find(|t| t.addr == addr)
@@ -379,6 +393,7 @@ mod tests {
             brightness: 1.0,
             sku: String::new(),
             white_leds: false,
+            segments: 0,
         });
         cfg.devices.push(DeviceTarget {
             ip: "bad".into(),
@@ -386,6 +401,7 @@ mod tests {
             brightness: 1.0,
             sku: String::new(),
             white_leds: false,
+            segments: 0,
         });
         let mut t = build_targets(&cfg, &[]);
         assert_eq!(t.len(), 1);
@@ -407,6 +423,17 @@ mod tests {
         let t = build_targets(&cfg, &[]);
         let on: Vec<bool> = t.iter().map(|t| t.profile.is_some()).collect();
         assert_eq!(on, [true, false, false]);
+    }
+
+    #[test]
+    fn segment_count_overrides_profile() {
+        let json = r#"{"enabled":true,"fps":30,"monitor":0,"tuning":{},
+            "devices":[{"ip":"10.0.0.2","zone":"all","sku":"H61F5","whiteLeds":true,"segments":7},
+                {"ip":"10.0.0.3","zone":"all","sku":"H61F5","whiteLeds":true}]}"#;
+        let cfg: EngineConfig = serde_json::from_str(json).unwrap();
+        let t = build_targets(&cfg, &[]);
+        assert_eq!(t[0].profile.unwrap().segments, 7);
+        assert_eq!(t[1].profile.unwrap().segments, 10);
     }
 
     #[test]

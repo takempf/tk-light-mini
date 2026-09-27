@@ -39,6 +39,7 @@ interface AppState {
   renameDevice: (id: string, name: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
   setWhiteLeds: (id: string, on: boolean) => void;
+  setSegments: (id: string, segments: number) => void;
   setEnabled: (on: boolean) => void;
   /** Stop syncing and switch every light off. */
   lightsOff: () => Promise<void>;
@@ -111,6 +112,8 @@ export const useStore = create<AppState>()(
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, brightness } : d)) })),
       setWhiteLeds: (id, whiteLeds) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, whiteLeds } : d)) })),
+      setSegments: (id, segments) =>
+        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, segments } : d)) })),
       setEnabled: (enabled) => set({ enabled }),
       lightsOff: async () => {
         set({ enabled: false });
@@ -152,12 +155,13 @@ export function toEngineConfig(
     fps: s.settings.fps,
     monitor: s.settings.monitor,
     tuning: s.settings.tuning,
-    devices: s.devices.map(({ ip, zone, brightness, sku, whiteLeds }) => ({
+    devices: s.devices.map(({ ip, zone, brightness, sku, whiteLeds, segments }) => ({
       ip,
       zone,
       brightness,
       sku,
       whiteLeds,
+      segments: segments ?? 0,
     })),
   };
 }

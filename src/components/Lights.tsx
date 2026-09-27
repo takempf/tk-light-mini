@@ -3,7 +3,7 @@ import {
   type AddedDevice,
   type GoveeDevice,
   type Rgb,
-  WHITE_LED_SKUS,
+  WHITE_LED_SEGMENTS,
   ZONES,
   type Zone,
 } from "../lib/types";
@@ -36,6 +36,8 @@ function LightRow({ device }: { device: AddedDevice }) {
   const setZone = useStore((s) => s.setZone);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
   const setWhiteLeds = useStore((s) => s.setWhiteLeds);
+  const setSegments = useStore((s) => s.setSegments);
+  const defaultSegments = WHITE_LED_SEGMENTS[device.sku];
   const color = useZoneColor(device.zone);
   const dot = color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as
     | Rgb
@@ -82,13 +84,24 @@ function LightRow({ device }: { device: AddedDevice }) {
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
-          {WHITE_LED_SKUS.has(device.sku) && (
+          {defaultSegments !== undefined && (
             <Switch
               checked={device.whiteLeds}
               onCheckedChange={(on: boolean) => setWhiteLeds(device.id, on)}
             >
               White LEDs (experimental)
             </Switch>
+          )}
+          {defaultSegments !== undefined && device.whiteLeds && (
+            <Slider
+              label="Segments"
+              value={device.segments ?? defaultSegments}
+              min={1}
+              max={56}
+              step={1}
+              format={String}
+              onChange={(v) => setSegments(device.id, v)}
+            />
           )}
           <div className="light-actions">
             <Button size="sm" onClick={() => api.identifyDevice(device.ip).catch(() => {})}>
