@@ -173,50 +173,32 @@ ul {
   padding: 0;
 }
 
-/* Preview: a TV on a wall. Edge bands are the zone colors. -------------- */
+/* Preview: the screen split into the zones it's sampled as. ------------ */
 
-.wall {
+.preview {
   position: relative;
-  aspect-ratio: 16 / 10;
+}
+.wall {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   border: var(--tk-border-width) solid var(--tk-border-subtle);
   border-radius: var(--tk-radius-lg);
   background: var(--tk-surface);
 }
-.edge {
+.zone {
+  fill: var(--tk-surface);
+  stroke: var(--tk-border-subtle);
+  stroke-width: 1px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.preview-status {
   position: absolute;
-}
-.edge-top,
-.edge-bottom {
-  left: 14%;
-  right: 14%;
-  height: 16%;
-}
-.edge-top {
-  top: 0;
-}
-.edge-bottom {
-  bottom: 0;
-}
-.edge-left,
-.edge-right {
-  top: 16%;
-  bottom: 16%;
-  width: 14%;
-}
-.edge-left {
-  left: 0;
-}
-.edge-right {
-  right: 0;
-}
-.screen {
-  position: absolute;
-  inset: 22% 20%;
+  inset: 0;
   display: grid;
   place-items: center;
-  background: #050506;
-  box-shadow: 0 0 0 3px #000;
   color: var(--tk-fg-subtle);
   font-family: var(--tk-label-font);
   font-size: var(--tk-text-xs);
@@ -224,6 +206,7 @@ ul {
   font-stretch: var(--tk-label-stretch);
   letter-spacing: var(--tk-label-tracking);
   text-transform: var(--tk-label-transform);
+  pointer-events: none;
 }
 
 /* Lights --------------------------------------------------------------- */

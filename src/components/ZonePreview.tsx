@@ -8,18 +8,37 @@ export function useZoneColor(zone: Zone): Rgb | undefined {
   return useZoneColors((s) => s.colors?.[ZONES.indexOf(zone)]);
 }
 
+/**
+ * The screen as the engine samples it, in a 100x100 box stretched to fit: four
+ * trapezoids as deep as the edge band, mitered at the corners, and the middle
+ * showing All.
+ */
+function shapes(depth: number): Record<Zone, string> {
+  const d = Math.min(Math.max(depth, 0.02), 0.5) * 100;
+  const e = 100 - d;
+  return {
+    top: `0,0 100,0 ${e},${d} ${d},${d}`,
+    right: `100,0 100,100 ${e},${e} ${e},${d}`,
+    bottom: `100,100 0,100 ${d},${e} ${e},${e}`,
+    left: `0,100 0,0 ${d},${d} ${d},${e}`,
+    all: `${d},${d} ${e},${d} ${e},${e} ${d},${e}`,
+  };
+}
+
 export function ZonePreview() {
   const enabled = useStore((s) => s.enabled);
-  const [top, left, bottom, right, all] = useZoneColors((s) => s.colors) ?? [];
+  const depth = useStore((s) => s.settings.tuning.depth);
+  const colors = useZoneColors((s) => s.colors);
+  const points = shapes(depth);
+  const status = enabled ? (colors ? null : "Waiting for frames…") : "Paused";
   return (
-    <figure className="preview" aria-label="Zone preview" data-live={enabled && !!all}>
-      <div className="wall" style={{ background: css(all) }}>
-        <span className="edge edge-top" style={{ background: css(top) }} />
-        <span className="edge edge-bottom" style={{ background: css(bottom) }} />
-        <span className="edge edge-left" style={{ background: css(left) }} />
-        <span className="edge edge-right" style={{ background: css(right) }} />
-        <div className="screen">{enabled ? (all ? null : "Waiting for frames…") : "Paused"}</div>
-      </div>
+    <figure className="preview" aria-label="Zone preview" data-live={enabled && !!colors}>
+      <svg className="wall" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        {ZONES.map((z, i) => (
+          <polygon key={z} className="zone" points={points[z]} style={{ fill: css(colors?.[i]) }} />
+        ))}
+      </svg>
+      {status && <div className="preview-status">{status}</div>}
     </figure>
   );
 }

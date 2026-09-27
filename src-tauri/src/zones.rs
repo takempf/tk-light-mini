@@ -229,10 +229,15 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
     let (top_end, bottom_start) = (y0 + band_h, y1.saturating_sub(band_h));
     let (left_end, right_start) = (x0 + band_w, x1.saturating_sub(band_w));
 
+    // Pixels in two bands (the corners) go to the nearer edge, measured in band
+    // depths, so each side is a trapezoid mitered along the corner diagonal.
+    let (inv_h, inv_w) = (1.0 / band_h as f32, 1.0 / band_w as f32);
     let mut acc = [Acc::default(); Zone::COUNT];
     for y in y0..y1 {
         let top = y < top_end;
         let bottom = y >= bottom_start;
+        let d_top = (y - y0) as f32 * inv_h;
+        let d_bottom = (y1 - 1 - y) as f32 * inv_h;
         let row = y * frame.stride;
         for x in x0..x1 {
             let i = row + x * 4;
@@ -249,18 +254,25 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
                 v * v + 2.0 * sat * v
             };
             acc[4].add(lin, v_lin, w);
-            if top {
-                acc[0].add(lin, v_lin, w);
+            let left = x < left_end;
+            let right = x >= right_start;
+            if !(top || bottom || left || right) {
+                continue;
             }
-            if bottom {
-                acc[2].add(lin, v_lin, w);
+            let mut side = 0;
+            let mut nearest = f32::MAX;
+            for (z, inside, d) in [
+                (0, top, d_top),
+                (1, left, (x - x0) as f32 * inv_w),
+                (2, bottom, d_bottom),
+                (3, right, (x1 - 1 - x) as f32 * inv_w),
+            ] {
+                if inside && d < nearest {
+                    side = z;
+                    nearest = d;
+                }
             }
-            if x < left_end {
-                acc[1].add(lin, v_lin, w);
-            }
-            if x >= right_start {
-                acc[3].add(lin, v_lin, w);
-            }
+            acc[side].add(lin, v_lin, w);
         }
     }
     [
@@ -397,6 +409,22 @@ mod tests {
         assert_eq!(dominant(z[Zone::Left.index()]), 0);
         let r = z[Zone::Right.index()];
         assert!(r[0] > 150 && r[1] > 150 && r[2] < 60, "{r:?}");
+    }
+
+    #[test]
+    fn corners_split_along_the_diagonal() {
+        // 100x100, 20% bands. Dim gray, so it isn't cropped as letterbox.
+        let mut img = Img::new(100, 100, [30, 30, 30]);
+        img.fill(10, 2, 11, 3, [255, 0, 0]); // top-left corner, near the top edge
+        img.fill(2, 10, 3, 11, [0, 0, 255]); // top-left corner, near the left edge
+        let t = Tuning {
+            depth: 0.2,
+            ..NEUTRAL
+        };
+        let z = extract(&img.frame(), &t);
+        let (top, left) = (z[Zone::Top.index()], z[Zone::Left.index()]);
+        assert!(top[0] > top[2] + 20, "{top:?}");
+        assert!(left[2] > left[0] + 20, "{left:?}");
     }
 
     #[test]
