@@ -46,6 +46,22 @@ async fn identify_device(engine: State<'_, Engine>, ip: String) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+/// Switch one light on or off. Sent twice, since UDP can drop packets; the
+/// second send also lands after any color the engine still had in flight.
+#[tauri::command]
+async fn set_power(ip: String, on: bool) -> Result<(), String> {
+    let addr = govee::control_addr(&ip).ok_or("invalid ip")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut s = govee::Sender::new().map_err(|e| e.to_string())?;
+        s.turn(addr, on);
+        std::thread::sleep(Duration::from_millis(150));
+        s.turn(addr, on);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Stop syncing and switch the lights off. The engine stops first so its last
 /// color can't land after the off. Sent twice, since UDP can drop packets.
 #[tauri::command]
@@ -81,6 +97,7 @@ pub fn run() {
             set_config,
             set_preview,
             identify_device,
+            set_power,
             lights_off
         ])
         .build(tauri::generate_context!())

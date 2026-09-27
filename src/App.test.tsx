@@ -65,6 +65,7 @@ describe("App", () => {
           zone: "all",
           brightness: 1,
           whiteLeds: false,
+          on: true,
         },
         {
           id: "B",
@@ -74,6 +75,7 @@ describe("App", () => {
           zone: "all",
           brightness: 1,
           whiteLeds: false,
+          on: true,
         },
       ],
     });
@@ -90,10 +92,36 @@ describe("App", () => {
     });
   });
 
+  it("switches one light off and leaves it out of sync", async () => {
+    useStore.setState({
+      devices: [
+        {
+          id: "A",
+          ip: "10.0.0.2",
+          sku: "H6199",
+          name: "Lamp",
+          zone: "all",
+          brightness: 1,
+          whiteLeds: false,
+          on: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const power = screen.getByRole("switch", { name: "Power for Lamp" });
+    await user.click(power);
+    expect(power).toHaveAttribute("aria-checked", "false");
+    expect(api.setPower).toHaveBeenCalledWith("10.0.0.2", false);
+    expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices).toEqual([]);
+    const row = power.closest(".light") as HTMLElement;
+    expect(within(row).getByText("Off")).toBeInTheDocument();
+  });
+
   it("toggles sync", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const power = screen.getByRole("switch");
+    const power = screen.getByRole("switch", { name: /off|syncing/i });
     expect(power).toHaveAttribute("aria-checked", "false");
     await user.click(power);
     expect(power).toHaveAttribute("aria-checked", "true");

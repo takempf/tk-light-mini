@@ -38,7 +38,25 @@ describe("devices", () => {
     addDevice(lamp);
     const { devices } = useStore.getState();
     expect(devices).toHaveLength(1);
-    expect(devices[0]).toMatchObject({ id: lamp.id, zone: "all", name: "H6199", brightness: 1 });
+    expect(devices[0]).toMatchObject({
+      id: lamp.id,
+      zone: "all",
+      name: "H6199",
+      brightness: 1,
+      on: true,
+    });
+  });
+
+  it("switches a light off and back on", () => {
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.addDevice(strip);
+    s.setPower(lamp.id, false);
+    expect(api.setPower).toHaveBeenLastCalledWith(lamp.ip, false);
+    expect(toEngineConfig(useStore.getState()).devices.map((d) => d.ip)).toEqual([strip.ip]);
+    s.setPower(lamp.id, true);
+    expect(api.setPower).toHaveBeenLastCalledWith(lamp.ip, true);
+    expect(toEngineConfig(useStore.getState()).devices).toHaveLength(2);
   });
 
   it("sets zone, renames and removes", () => {

@@ -35,27 +35,35 @@ function LightRow({ device }: { device: AddedDevice }) {
   const remove = useStore((s) => s.removeDevice);
   const setZone = useStore((s) => s.setZone);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
+  const setPower = useStore((s) => s.setPower);
   const setWhiteLeds = useStore((s) => s.setWhiteLeds);
   const setSegments = useStore((s) => s.setSegments);
   const defaultSegments = WHITE_LED_SEGMENTS[device.sku];
   const color = useZoneColor(device.zone);
-  const dot = color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as
-    | Rgb
-    | undefined;
+  const dot = device.on
+    ? (color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as Rgb | undefined)
+    : undefined;
   return (
-    <Accordion.Item value={device.id} className="light">
-      <Accordion.Trigger className="light-trigger">
-        <span className="dot" style={{ background: css(dot) }} />
-        <span className="light-title">
-          <span className="light-name">{device.name || device.sku}</span>
-          <span className="meta">
-            {device.sku} · {device.ip}
+    <Accordion.Item value={device.id} className="light" data-off={device.on ? undefined : ""}>
+      <div className="light-head">
+        <Accordion.Trigger className="light-trigger">
+          <span className="dot" style={{ background: css(dot) }} />
+          <span className="light-title">
+            <span className="light-name">{device.name || device.sku}</span>
+            <span className="meta">
+              {device.sku} · {device.ip}
+            </span>
           </span>
-        </span>
-        <span className="meta light-summary">
-          {ZONE_LABEL[device.zone]} · {pct(device.brightness)}
-        </span>
-      </Accordion.Trigger>
+          <span className="meta light-summary">
+            {device.on ? `${ZONE_LABEL[device.zone]} · ${pct(device.brightness)}` : "Off"}
+          </span>
+        </Accordion.Trigger>
+        <Switch
+          aria-label={`Power for ${device.name || device.sku}`}
+          checked={device.on}
+          onCheckedChange={(on: boolean) => setPower(device.id, on)}
+        />
+      </div>
       <Accordion.Panel className="light-panel">
         <div className="light-body stack">
           <Input

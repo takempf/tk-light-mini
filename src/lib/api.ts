@@ -10,6 +10,7 @@ export const api = {
   setConfig: (config: EngineConfig) => invoke<void>("set_config", { config }),
   setPreview: (enabled: boolean) => invoke<void>("set_preview", { enabled }),
   identifyDevice: (ip: string) => invoke<void>("identify_device", { ip }),
+  setPower: (ip: string, on: boolean) => invoke<void>("set_power", { ip, on }),
   lightsOff: (ips: string[]) => invoke<void>("lights_off", { ips }),
   onZones: (cb: (c: ZoneColors) => void): Promise<UnlistenFn> =>
     listen<ZoneColors>("zones", (e) => cb(e.payload)),

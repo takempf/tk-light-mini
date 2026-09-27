@@ -38,6 +38,8 @@ interface AppState {
   setZone: (id: string, zone: Zone) => void;
   renameDevice: (id: string, name: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
+  /** Switch one light on or off, right away and for sync. */
+  setPower: (id: string, on: boolean) => void;
   setWhiteLeds: (id: string, on: boolean) => void;
   setSegments: (id: string, segments: number) => void;
   setEnabled: (on: boolean) => void;
@@ -99,7 +101,14 @@ export const useStore = create<AppState>()(
             : {
                 devices: [
                   ...s.devices,
-                  { ...d, name: d.sku || d.id, zone: "all", brightness: 1, whiteLeds: false },
+                  {
+                    ...d,
+                    name: d.sku || d.id,
+                    on: true,
+                    zone: "all",
+                    brightness: 1,
+                    whiteLeds: false,
+                  },
                 ],
               },
         ),
@@ -110,6 +119,11 @@ export const useStore = create<AppState>()(
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) })),
       setDeviceBrightness: (id, brightness) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, brightness } : d)) })),
+      setPower: (id, on) => {
+        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, on } : d)) }));
+        const d = get().devices.find((x) => x.id === id);
+        if (d) api.setPower(d.ip, on).catch((e) => console.error("set_power", e));
+      },
       setWhiteLeds: (id, whiteLeds) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, whiteLeds } : d)) })),
       setSegments: (id, segments) =>
@@ -128,7 +142,7 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "tk-light-mini",
-      version: 3,
+      version: 4,
       migrate: (old, version) => {
         const s = old as { devices?: AddedDevice[] };
         if (version < 2 && s.devices) {
@@ -136,6 +150,9 @@ export const useStore = create<AppState>()(
         }
         if (version < 3 && s.devices) {
           s.devices = s.devices.map((d) => ({ ...d, whiteLeds: d.whiteLeds ?? false }));
+        }
+        if (version < 4 && s.devices) {
+          s.devices = s.devices.map((d) => ({ ...d, on: d.on ?? true }));
         }
         return s as AppState;
       },
@@ -155,13 +172,15 @@ export function toEngineConfig(
     fps: s.settings.fps,
     monitor: s.settings.monitor,
     tuning: s.settings.tuning,
-    devices: s.devices.map(({ ip, zone, brightness, sku, whiteLeds, segments }) => ({
-      ip,
-      zone,
-      brightness,
-      sku,
-      whiteLeds,
-      segments: segments ?? 0,
-    })),
+    devices: s.devices
+      .filter((d) => d.on)
+      .map(({ ip, zone, brightness, sku, whiteLeds, segments }) => ({
+        ip,
+        zone,
+        brightness,
+        sku,
+        whiteLeds,
+        segments: segments ?? 0,
+      })),
   };
 }

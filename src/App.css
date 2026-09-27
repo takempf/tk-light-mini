@@ -290,6 +290,18 @@ ul {
 .light.found .light-name {
   color: var(--tk-fg-muted);
 }
+.light-head {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-3);
+}
+.light-head > .tk-accordion-header {
+  flex: 1;
+  min-width: 0;
+}
+.light[data-off] .light-title {
+  opacity: 0.5;
+}
 .light-summary {
   flex: none;
   font-variant-numeric: tabular-nums;

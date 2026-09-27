@@ -14,6 +14,8 @@ export interface GoveeDevice {
 
 export interface AddedDevice extends GoveeDevice {
   name: string;
+  /** Off lights are switched off and skipped by sync. */
+  on: boolean;
   zone: Zone;
   /** Per-light multiplier on top of the global tuning. 1 = unchanged. */
   brightness: number;

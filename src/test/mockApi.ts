@@ -16,6 +16,7 @@ export function mockApiModule() {
       setConfig: vi.fn(async () => {}),
       setPreview: vi.fn(async () => {}),
       identifyDevice: vi.fn(async () => {}),
+      setPower: vi.fn(async () => {}),
       lightsOff: vi.fn(async () => {}),
       onZones: vi.fn(async (cb: (c: ZoneColors) => void) => {
         listeners.zones = cb;
