@@ -187,9 +187,10 @@ ul {
   border-radius: var(--tk-radius-lg);
   background: var(--tk-surface);
 }
+/* A hairline in the zone's own color hides anti-aliasing seams between zones. */
 .zone {
   fill: var(--tk-surface);
-  stroke: var(--tk-border-subtle);
+  stroke: var(--tk-surface);
   stroke-width: 1px;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;

@@ -35,7 +35,12 @@ export function ZonePreview() {
     <figure className="preview" aria-label="Zone preview" data-live={enabled && !!colors}>
       <svg className="wall" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
         {ZONES.map((z, i) => (
-          <polygon key={z} className="zone" points={points[z]} style={{ fill: css(colors?.[i]) }} />
+          <polygon
+            key={z}
+            className="zone"
+            points={points[z]}
+            style={{ fill: css(colors?.[i]), stroke: css(colors?.[i]) }}
+          />
         ))}
       </svg>
       {status && <div className="preview-status">{status}</div>}
