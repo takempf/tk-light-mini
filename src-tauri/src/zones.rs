@@ -76,7 +76,7 @@ const BAR_FRACTION: f32 = 0.9;
 /// Never crop more than this fraction from any side.
 const MAX_BAR: f32 = 0.25;
 
-pub(crate) fn srgb_to_linear_lut() -> &'static [f32; 256] {
+fn srgb_to_linear_lut() -> &'static [f32; 256] {
     static LUT: OnceLock<[f32; 256]> = OnceLock::new();
     LUT.get_or_init(|| {
         let mut t = [0f32; 256];
@@ -92,7 +92,7 @@ pub(crate) fn srgb_to_linear_lut() -> &'static [f32; 256] {
     })
 }
 
-pub(crate) fn linear_to_srgb(c: f32) -> f32 {
+fn linear_to_srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.003_130_8 {
         c * 12.92

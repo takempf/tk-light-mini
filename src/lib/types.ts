@@ -19,17 +19,17 @@ export interface AddedDevice extends GoveeDevice {
   zone: Zone;
   /** Per-light multiplier on top of the global tuning. 1 = unchanged. */
   brightness: number;
-  /** Experimental: mix in the white LEDs (segments over ptReal). */
-  whiteLeds: boolean;
-  /** Segments on the strip, for white LEDs. Unset = the SKU's default. */
+  /** Experimental: stream in razer mode, which skips the light's own fade. */
+  razer: boolean;
+  /** Segments to fill in razer mode. Unset = `defaultSegments(sku)`. */
   segments?: number;
 }
 
-/**
- * SKUs with white LEDs the engine can drive, with their default segment count.
- * Keep in sync with `ptreal::profile`.
- */
-export const WHITE_LED_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10 };
+/** Segment counts measured on real lights. */
+const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10 };
+
+/** Segments to fill in razer mode. 15 is common on Govee strips. */
+export const defaultSegments = (sku: string) => KNOWN_SEGMENTS[sku] ?? 15;
 
 export interface Tuning {
   saturation: number;
@@ -61,12 +61,5 @@ export interface EngineConfig {
   fps: number;
   monitor: number;
   tuning: Tuning;
-  devices: {
-    ip: string;
-    zone: Zone;
-    brightness: number;
-    sku: string;
-    whiteLeds: boolean;
-    segments: number;
-  }[];
+  devices: { ip: string; zone: Zone; brightness: number; razer: boolean; segments: number }[];
 }

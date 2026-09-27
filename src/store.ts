@@ -1,16 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { api } from "./lib/api";
-import type {
-  AddedDevice,
-  EngineConfig,
-  EngineStatus,
-  GoveeDevice,
-  MonitorInfo,
-  Settings,
-  Tuning,
-  Zone,
-  ZoneColors,
+import {
+  type AddedDevice,
+  defaultSegments,
+  type EngineConfig,
+  type EngineStatus,
+  type GoveeDevice,
+  type MonitorInfo,
+  type Settings,
+  type Tuning,
+  type Zone,
+  type ZoneColors,
 } from "./lib/types";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -40,7 +41,7 @@ interface AppState {
   setDeviceBrightness: (id: string, brightness: number) => void;
   /** Switch one light on or off, right away and for sync. */
   setPower: (id: string, on: boolean) => void;
-  setWhiteLeds: (id: string, on: boolean) => void;
+  setRazer: (id: string, on: boolean) => void;
   setSegments: (id: string, segments: number) => void;
   setEnabled: (on: boolean) => void;
   /** Stop syncing and switch every light off. */
@@ -107,7 +108,7 @@ export const useStore = create<AppState>()(
                     on: true,
                     zone: "all",
                     brightness: 1,
-                    whiteLeds: false,
+                    razer: false,
                   },
                 ],
               },
@@ -124,8 +125,8 @@ export const useStore = create<AppState>()(
         const d = get().devices.find((x) => x.id === id);
         if (d) api.setPower(d.ip, on).catch((e) => console.error("set_power", e));
       },
-      setWhiteLeds: (id, whiteLeds) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, whiteLeds } : d)) })),
+      setRazer: (id, razer) =>
+        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, razer } : d)) })),
       setSegments: (id, segments) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, segments } : d)) })),
       setEnabled: (enabled) => set({ enabled }),
@@ -142,17 +143,23 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "tk-light-mini",
-      version: 4,
+      version: 5,
       migrate: (old, version) => {
         const s = old as { devices?: AddedDevice[] };
         if (version < 2 && s.devices) {
           s.devices = s.devices.map((d) => ({ ...d, brightness: d.brightness ?? 1 }));
         }
-        if (version < 3 && s.devices) {
-          s.devices = s.devices.map((d) => ({ ...d, whiteLeds: d.whiteLeds ?? false }));
-        }
         if (version < 4 && s.devices) {
           s.devices = s.devices.map((d) => ({ ...d, on: d.on ?? true }));
+        }
+        if (version < 5 && s.devices) {
+          // v3-4 had an experimental `whiteLeds` flag, replaced by razer mode.
+          s.devices = s.devices.map(
+            ({ whiteLeds: _, ...d }: AddedDevice & { whiteLeds?: boolean }) => ({
+              ...d,
+              razer: d.razer ?? false,
+            }),
+          );
         }
         return s as AppState;
       },
@@ -174,13 +181,12 @@ export function toEngineConfig(
     tuning: s.settings.tuning,
     devices: s.devices
       .filter((d) => d.on)
-      .map(({ ip, zone, brightness, sku, whiteLeds, segments }) => ({
+      .map(({ ip, zone, brightness, sku, razer, segments }) => ({
         ip,
         zone,
         brightness,
-        sku,
-        whiteLeds,
-        segments: segments ?? 0,
+        razer,
+        segments: segments ?? defaultSegments(sku),
       })),
   };
 }

@@ -113,9 +113,7 @@ describe("settings", () => {
       fps: 30,
       monitor: 0,
       tuning: DEFAULT_SETTINGS.tuning,
-      devices: [
-        { ip: lamp.ip, zone: "all", brightness: 1, sku: lamp.sku, whiteLeds: false, segments: 0 },
-      ],
+      devices: [{ ip: lamp.ip, zone: "all", brightness: 1, razer: false, segments: 15 }],
     });
   });
 });

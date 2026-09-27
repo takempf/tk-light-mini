@@ -54,7 +54,7 @@ describe("App", () => {
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]?.brightness).toBe(0.5);
   });
 
-  it("offers white LEDs only on supported lights", async () => {
+  it("streams a light in razer mode with its segment count", async () => {
     useStore.setState({
       devices: [
         {
@@ -64,17 +64,7 @@ describe("App", () => {
           name: "Strip",
           zone: "all",
           brightness: 1,
-          whiteLeds: false,
-          on: true,
-        },
-        {
-          id: "B",
-          ip: "10.0.0.3",
-          sku: "H6199",
-          name: "Lamp",
-          zone: "all",
-          brightness: 1,
-          whiteLeds: false,
+          razer: false,
           on: true,
         },
       ],
@@ -82,13 +72,13 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: /strip/i }));
-    await user.click(screen.getByRole("button", { name: /lamp/i }));
-    expect(screen.getAllByRole("switch", { name: /white leds/i })).toHaveLength(1);
-    await user.click(screen.getByRole("switch", { name: /white leds/i }));
-    expect(useStore.getState().devices[0]?.whiteLeds).toBe(true);
+    expect(screen.queryByRole("slider", { name: "Segments" })).toBeNull();
+    await user.click(screen.getByRole("switch", { name: /razer/i }));
+    expect(useStore.getState().devices[0]?.razer).toBe(true);
+    expect(screen.getByRole("slider", { name: "Segments" })).toBeInTheDocument();
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]).toMatchObject({
-      sku: "H61F5",
-      whiteLeds: true,
+      razer: true,
+      segments: 10,
     });
   });
 
@@ -102,7 +92,7 @@ describe("App", () => {
           name: "Lamp",
           zone: "all",
           brightness: 1,
-          whiteLeds: false,
+          razer: false,
           on: true,
         },
       ],

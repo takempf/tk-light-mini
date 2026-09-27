@@ -1,6 +1,7 @@
 mod capture;
 mod engine;
 mod govee;
+#[cfg(test)]
 mod ptreal;
 mod zones;
 

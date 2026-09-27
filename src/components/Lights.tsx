@@ -1,9 +1,9 @@
 import { api } from "../lib/api";
 import {
   type AddedDevice,
+  defaultSegments,
   type GoveeDevice,
   type Rgb,
-  WHITE_LED_SEGMENTS,
   ZONES,
   type Zone,
 } from "../lib/types";
@@ -36,9 +36,8 @@ function LightRow({ device }: { device: AddedDevice }) {
   const setZone = useStore((s) => s.setZone);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
   const setPower = useStore((s) => s.setPower);
-  const setWhiteLeds = useStore((s) => s.setWhiteLeds);
+  const setRazer = useStore((s) => s.setRazer);
   const setSegments = useStore((s) => s.setSegments);
-  const defaultSegments = WHITE_LED_SEGMENTS[device.sku];
   const color = useZoneColor(device.zone);
   const dot = device.on
     ? (color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as Rgb | undefined)
@@ -92,20 +91,15 @@ function LightRow({ device }: { device: AddedDevice }) {
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
-          {defaultSegments !== undefined && (
-            <Switch
-              checked={device.whiteLeds}
-              onCheckedChange={(on: boolean) => setWhiteLeds(device.id, on)}
-            >
-              White LEDs (experimental)
-            </Switch>
-          )}
-          {defaultSegments !== undefined && device.whiteLeds && (
+          <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
+            Razer streaming (experimental)
+          </Switch>
+          {device.razer && (
             <Slider
               label="Segments"
-              value={device.segments ?? defaultSegments}
+              value={device.segments ?? defaultSegments(device.sku)}
               min={1}
-              max={56}
+              max={100}
               step={1}
               format={String}
               onChange={(v) => setSegments(device.id, v)}
