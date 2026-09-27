@@ -54,6 +54,42 @@ describe("App", () => {
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]?.brightness).toBe(0.5);
   });
 
+  it("offers white LEDs only on supported lights", async () => {
+    useStore.setState({
+      devices: [
+        {
+          id: "A",
+          ip: "10.0.0.2",
+          sku: "H61F5",
+          name: "Strip",
+          zone: "all",
+          brightness: 1,
+          whiteLeds: false,
+        },
+        {
+          id: "B",
+          ip: "10.0.0.3",
+          sku: "H6199",
+          name: "Lamp",
+          zone: "all",
+          brightness: 1,
+          whiteLeds: false,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /strip/i }));
+    await user.click(screen.getByRole("button", { name: /lamp/i }));
+    expect(screen.getAllByRole("switch", { name: /white leds/i })).toHaveLength(1);
+    await user.click(screen.getByRole("switch", { name: /white leds/i }));
+    expect(useStore.getState().devices[0]?.whiteLeds).toBe(true);
+    expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]).toMatchObject({
+      sku: "H61F5",
+      whiteLeds: true,
+    });
+  });
+
   it("toggles sync", async () => {
     const user = userEvent.setup();
     render(<App />);

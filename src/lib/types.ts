@@ -17,7 +17,12 @@ export interface AddedDevice extends GoveeDevice {
   zone: Zone;
   /** Per-light multiplier on top of the global tuning. 1 = unchanged. */
   brightness: number;
+  /** Experimental: mix in the white LEDs (segments over ptReal). */
+  whiteLeds: boolean;
 }
+
+/** SKUs with white LEDs the engine can drive. Keep in sync with `ptreal::profile`. */
+export const WHITE_LED_SKUS: ReadonlySet<string> = new Set(["H61F5"]);
 
 export interface Tuning {
   saturation: number;
@@ -49,5 +54,5 @@ export interface EngineConfig {
   fps: number;
   monitor: number;
   tuning: Tuning;
-  devices: { ip: string; zone: Zone; brightness: number }[];
+  devices: { ip: string; zone: Zone; brightness: number; sku: string; whiteLeds: boolean }[];
 }

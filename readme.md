@@ -76,6 +76,22 @@ cargo test -- --ignored live_capture --nocapture    # grab a real frame
 cargo test -- --ignored live_scan_raw --nocapture   # print every Govee scan reply
 ```
 
+## Experimental: white LEDs
+
+Some lights have real white LEDs next to the color ones. The normal LAN color command only drives the color LEDs, so whites get mixed from red, green and blue.
+
+On supported lights (only the **H61F5** for now), the light's panel has a **White LEDs** switch. With it on, the app uses Govee's undocumented `ptReal` command to set each segment on its own. It makes some segments white and the rest color, in the right ratio, so from a step back the strip shows the screen's color with real white mixed in. Gray scenes go all white. Vivid scenes use no white.
+
+This is a test. It uses an undocumented API, and the packet layout comes from other SKUs (H61E0, H6046). Probes, with the light's IP in `GOVEE_IP`:
+
+```sh
+cd src-tauri
+cargo test -- --ignored live_pt_split --nocapture       # half red, half white
+cargo test -- --ignored live_pt_walk --nocapture        # count the segments
+cargo test -- --ignored live_pt_tandem --nocapture      # can one segment light white and color at once?
+cargo test -- --ignored live_pt_white_fade --nocapture  # does segment brightness dim white?
+```
+
 ## Limits
 
 - Windows only for now. Capture uses DXGI.

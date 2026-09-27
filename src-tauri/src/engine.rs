@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::capture::{CaptureError, Capturer};
 use crate::govee::{control_addr, Sender};
+use crate::ptreal::{self, Mix, Profile};
 use crate::zones::{extract, Rgb, Smoother, Tuning, Zone};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -20,6 +21,11 @@ pub struct DeviceTarget {
     pub zone: Zone,
     #[serde(default = "full")]
     pub brightness: f32,
+    #[serde(default)]
+    pub sku: String,
+    /// Experimental: mix in the white LEDs via `ptReal`, if the SKU has a profile.
+    #[serde(default)]
+    pub white_leds: bool,
 }
 
 fn full() -> f32 {
@@ -62,6 +68,8 @@ pub const EVENT_STATUS: &str = "engine-status";
 const KEEPALIVE: Duration = Duration::from_secs(1);
 /// Skip sends when no channel moved more than this.
 const MIN_DELTA: u8 = 2;
+/// `ptReal` sends up to 4 frames per update; don't flood the device.
+const PT_MIN_INTERVAL: Duration = Duration::from_millis(50);
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
 
 struct Shared {
@@ -141,7 +149,10 @@ struct Target {
     addr: SocketAddr,
     zone: usize,
     brightness: f32,
+    /// Set when this light is driven through `ptReal`.
+    profile: Option<Profile>,
     last: Option<Rgb>,
+    mix: Option<Mix>,
     sent_at: Instant,
 }
 
@@ -150,12 +161,18 @@ fn build_targets(cfg: &EngineConfig, old: &[Target]) -> Vec<Target> {
         .iter()
         .filter_map(|d| {
             let addr = control_addr(&d.ip)?;
-            let prev = old.iter().find(|t| t.addr == addr);
+            let profile = d.white_leds.then(|| ptreal::profile(&d.sku)).flatten();
+            let prev = old
+                .iter()
+                .find(|t| t.addr == addr)
+                .filter(|p| p.zone == d.zone.index() && p.profile == profile);
             Some(Target {
                 addr,
                 zone: d.zone.index(),
                 brightness: d.brightness.max(0.0),
-                last: prev.and_then(|p| (p.zone == d.zone.index()).then_some(p.last).flatten()),
+                profile,
+                last: prev.and_then(|p| p.last),
+                mix: prev.and_then(|p| p.mix),
                 sent_at: prev.map_or_else(Instant::now, |p| p.sent_at),
             })
         })
@@ -168,6 +185,10 @@ fn scale(c: Rgb, k: f32) -> Rgb {
 
 fn changed(a: Rgb, b: Rgb) -> bool {
     (0..3).any(|i| a[i].abs_diff(b[i]) >= MIN_DELTA)
+}
+
+fn mix_changed(a: Mix, b: Mix) -> bool {
+    a.whites != b.whites || a.level.abs_diff(b.level) >= MIN_DELTA || changed(a.color, b.color)
 }
 
 #[cfg(windows)]
@@ -279,10 +300,22 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
         for t in &mut targets {
             if held.contains(&t.addr) {
                 t.last = None;
+                t.mix = None;
                 continue;
             }
             let c = scale(colors[t.zone], t.brightness);
-            let due = t.last.is_none_or(|l| changed(l, c)) || t.sent_at.elapsed() >= KEEPALIVE;
+            let stale = t.sent_at.elapsed() >= KEEPALIVE;
+            if let Some(p) = t.profile {
+                let m = ptreal::mix(c, p.segments, t.mix.map(|m| m.whites));
+                let due = t.mix.is_none_or(|l| mix_changed(l, m)) || stale;
+                if due && (t.mix.is_none() || t.sent_at.elapsed() >= PT_MIN_INTERVAL) {
+                    sender.pt_real(t.addr, &ptreal::frames(m, p));
+                    t.mix = Some(m);
+                    t.sent_at = tick;
+                }
+                continue;
+            }
+            let due = t.last.is_none_or(|l| changed(l, c)) || stale;
             if due {
                 sender.color(t.addr, c);
                 t.last = Some(c);
@@ -344,11 +377,15 @@ mod tests {
             ip: "10.0.0.2".into(),
             zone: Zone::Top,
             brightness: 1.0,
+            sku: String::new(),
+            white_leds: false,
         });
         cfg.devices.push(DeviceTarget {
             ip: "bad".into(),
             zone: Zone::Top,
             brightness: 1.0,
+            sku: String::new(),
+            white_leds: false,
         });
         let mut t = build_targets(&cfg, &[]);
         assert_eq!(t.len(), 1);
@@ -358,6 +395,31 @@ mod tests {
         cfg.devices[0].zone = Zone::All;
         let t3 = build_targets(&cfg, &t2);
         assert_eq!(t3[0].last, None, "zone change forces resend");
+    }
+
+    #[test]
+    fn white_leds_only_for_known_skus() {
+        let json = r#"{"enabled":true,"fps":30,"monitor":0,"tuning":{},
+            "devices":[{"ip":"10.0.0.2","zone":"all","sku":"H61F5","whiteLeds":true},
+                {"ip":"10.0.0.3","zone":"all","sku":"H61F5"},
+                {"ip":"10.0.0.4","zone":"all","sku":"H6199","whiteLeds":true}]}"#;
+        let cfg: EngineConfig = serde_json::from_str(json).unwrap();
+        let t = build_targets(&cfg, &[]);
+        let on: Vec<bool> = t.iter().map(|t| t.profile.is_some()).collect();
+        assert_eq!(on, [true, false, false]);
+    }
+
+    #[test]
+    fn toggling_white_leds_forces_resend() {
+        let mut cfg: EngineConfig = serde_json::from_str(
+            r#"{"enabled":true,"fps":30,"monitor":0,"tuning":{},
+            "devices":[{"ip":"10.0.0.2","zone":"all","sku":"H61F5"}]}"#,
+        )
+        .unwrap();
+        let mut t = build_targets(&cfg, &[]);
+        t[0].last = Some([1, 2, 3]);
+        cfg.devices[0].white_leds = true;
+        assert_eq!(build_targets(&cfg, &t)[0].last, None);
     }
 
     #[test]

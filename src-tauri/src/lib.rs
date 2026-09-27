@@ -1,6 +1,7 @@
 mod capture;
 mod engine;
 mod govee;
+mod ptreal;
 mod zones;
 
 use std::time::Duration;

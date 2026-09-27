@@ -1,7 +1,14 @@
 import { api } from "../lib/api";
-import { type AddedDevice, type GoveeDevice, type Rgb, ZONES, type Zone } from "../lib/types";
+import {
+  type AddedDevice,
+  type GoveeDevice,
+  type Rgb,
+  WHITE_LED_SKUS,
+  ZONES,
+  type Zone,
+} from "../lib/types";
 import { useStore } from "../store";
-import { Accordion, Button, Eyebrow, Input, Panel, Toggle, ToggleGroup } from "../ui";
+import { Accordion, Button, Eyebrow, Input, Panel, Switch, Toggle, ToggleGroup } from "../ui";
 import { pct, Slider } from "./Slider";
 import { css, useZoneColor } from "./ZonePreview";
 
@@ -28,6 +35,7 @@ function LightRow({ device }: { device: AddedDevice }) {
   const remove = useStore((s) => s.removeDevice);
   const setZone = useStore((s) => s.setZone);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
+  const setWhiteLeds = useStore((s) => s.setWhiteLeds);
   const color = useZoneColor(device.zone);
   const dot = color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as
     | Rgb
@@ -74,6 +82,14 @@ function LightRow({ device }: { device: AddedDevice }) {
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
+          {WHITE_LED_SKUS.has(device.sku) && (
+            <Switch
+              checked={device.whiteLeds}
+              onCheckedChange={(on: boolean) => setWhiteLeds(device.id, on)}
+            >
+              White LEDs (experimental)
+            </Switch>
+          )}
           <div className="light-actions">
             <Button size="sm" onClick={() => api.identifyDevice(device.ip).catch(() => {})}>
               Identify

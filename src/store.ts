@@ -38,6 +38,7 @@ interface AppState {
   setZone: (id: string, zone: Zone) => void;
   renameDevice: (id: string, name: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
+  setWhiteLeds: (id: string, on: boolean) => void;
   setEnabled: (on: boolean) => void;
   /** Stop syncing and switch every light off. */
   lightsOff: () => Promise<void>;
@@ -95,7 +96,10 @@ export const useStore = create<AppState>()(
           s.devices.some((x) => x.id === d.id)
             ? s
             : {
-                devices: [...s.devices, { ...d, name: d.sku || d.id, zone: "all", brightness: 1 }],
+                devices: [
+                  ...s.devices,
+                  { ...d, name: d.sku || d.id, zone: "all", brightness: 1, whiteLeds: false },
+                ],
               },
         ),
       removeDevice: (id) => set((s) => ({ devices: s.devices.filter((d) => d.id !== id) })),
@@ -105,6 +109,8 @@ export const useStore = create<AppState>()(
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) })),
       setDeviceBrightness: (id, brightness) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, brightness } : d)) })),
+      setWhiteLeds: (id, whiteLeds) =>
+        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, whiteLeds } : d)) })),
       setEnabled: (enabled) => set({ enabled }),
       lightsOff: async () => {
         set({ enabled: false });
@@ -119,11 +125,14 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "tk-light-mini",
-      version: 2,
+      version: 3,
       migrate: (old, version) => {
         const s = old as { devices?: AddedDevice[] };
         if (version < 2 && s.devices) {
           s.devices = s.devices.map((d) => ({ ...d, brightness: d.brightness ?? 1 }));
+        }
+        if (version < 3 && s.devices) {
+          s.devices = s.devices.map((d) => ({ ...d, whiteLeds: d.whiteLeds ?? false }));
         }
         return s as AppState;
       },
@@ -143,6 +152,12 @@ export function toEngineConfig(
     fps: s.settings.fps,
     monitor: s.settings.monitor,
     tuning: s.settings.tuning,
-    devices: s.devices.map(({ ip, zone, brightness }) => ({ ip, zone, brightness })),
+    devices: s.devices.map(({ ip, zone, brightness, sku, whiteLeds }) => ({
+      ip,
+      zone,
+      brightness,
+      sku,
+      whiteLeds,
+    })),
   };
 }

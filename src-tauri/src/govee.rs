@@ -10,6 +10,10 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+
+use crate::ptreal::Frame;
 use crate::zones::Rgb;
 
 const SCAN_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
@@ -181,6 +185,23 @@ impl Sender {
         let _ = self.sock.send_to(self.buf.as_bytes(), to);
     }
 
+    /// Raw BLE frames through the undocumented `ptReal` command.
+    pub fn pt_real(&mut self, to: SocketAddr, frames: &[Frame]) {
+        self.buf.clear();
+        self.buf
+            .push_str(r#"{"msg":{"cmd":"ptReal","data":{"command":["#);
+        for (i, f) in frames.iter().enumerate() {
+            if i > 0 {
+                self.buf.push(',');
+            }
+            self.buf.push('"');
+            BASE64.encode_string(f, &mut self.buf);
+            self.buf.push('"');
+        }
+        self.buf.push_str("]}}}");
+        let _ = self.sock.send_to(self.buf.as_bytes(), to);
+    }
+
     /// Device brightness, 1-100.
     pub fn brightness(&mut self, to: SocketAddr, percent: u8) {
         self.buf.clear();
@@ -286,6 +307,24 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&buf[..n]).unwrap();
         assert_eq!(v["msg"]["cmd"], "colorwc");
         assert_eq!(v["msg"]["data"]["color"]["g"], 2);
+    }
+
+    #[test]
+    fn pt_real_message_carries_base64_frames() {
+        let rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        rx.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut s = Sender::new().unwrap();
+        s.pt_real(rx.local_addr().unwrap(), &[[0x33; 20], [0; 20]]);
+        let mut buf = [0u8; 256];
+        let n = rx.recv(&mut buf).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&buf[..n]).unwrap();
+        assert_eq!(v["msg"]["cmd"], "ptReal");
+        let cmds = v["msg"]["data"]["command"].as_array().unwrap();
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(
+            BASE64.decode(cmds[0].as_str().unwrap()).unwrap(),
+            [0x33; 20]
+        );
     }
 
     #[test]
