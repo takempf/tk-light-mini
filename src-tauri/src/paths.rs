@@ -301,4 +301,38 @@ mod tests {
         assert!(!s.fits(5, 100, 50));
         assert!(!s.fits(4, 120, 50));
     }
+
+    /// Real desktop: an edge loop of 10 segments over a captured frame, with
+    /// timings. `cargo test -- --ignored live_path --nocapture`
+    #[test]
+    #[ignore]
+    fn live_path() {
+        use crate::capture::Capturer;
+        use std::time::{Duration, Instant};
+        let mut c = Capturer::new(0).expect("create capturer");
+        let loop_ = line(&[[0.95, 0.9], [0.95, 0.1], [0.05, 0.1], [0.05, 0.9]], 0.12, true);
+        for _ in 0..60 {
+            let r = c
+                .poll(|f| {
+                    let t0 = Instant::now();
+                    let mut s = PathSampler::new(&loop_, 10, f.width, f.height);
+                    let built = t0.elapsed();
+                    let t1 = Instant::now();
+                    let mut out = Vec::new();
+                    s.sample(f, &Tuning::default(), &mut out);
+                    (f.width, f.height, s.pixels.len(), built, t1.elapsed(), out)
+                })
+                .unwrap();
+            if let Some((w, h, px, built, sampled, out)) = r {
+                println!("{w}x{h}, {px} path pixels, built in {built:?}, sampled in {sampled:?}");
+                for (i, c) in out.iter().enumerate() {
+                    println!("segment {}: {c:?}", i + 1);
+                }
+                assert_eq!(out.len(), 10);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(33));
+        }
+        panic!("no frame within 2s");
+    }
 }
