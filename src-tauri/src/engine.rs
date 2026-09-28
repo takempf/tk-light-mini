@@ -10,22 +10,36 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+
 use crate::capture::{CaptureError, Capturer};
 use crate::govee::{control_addr, Sender};
-use crate::zones::{extract, Rgb, Smoother, Tuning, Zone};
+use crate::paths::{PathConfig, PathSampler};
+use crate::zones::{extract, Frame, Rgb, Smoother, Tuning, Zone};
 
-/// Where a light or segment gets its color: a live screen zone, or fixed.
-/// From JSON as a zone name (`"top"`) or `"#rrggbb"`.
+/// Where a light or segment gets its color: a live screen zone, the light's
+/// own path, or fixed. From JSON as a zone name (`"top"`), `"path"` or
+/// `"#rrggbb"`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Source {
     Live(Zone),
+    /// Segment `i` takes region `i` of the light's path.
+    Path,
     Fixed(Rgb),
 }
 
 impl Source {
-    fn resolve(self, zones: &[Rgb; Zone::COUNT]) -> Rgb {
+    /// Color for segment `i`. `path` has the light's path colors, if any; without
+    /// a path, `Path` falls back to the screen average.
+    fn resolve(self, zones: &[Rgb], path: &[Rgb], i: usize) -> Rgb {
         match self {
             Source::Live(z) => zones[z.index()],
+            Source::Path => path
+                .get(i)
+                .or(path.first())
+                .copied()
+                .unwrap_or(zones[Zone::All.index()]),
             Source::Fixed(c) => c,
         }
     }
@@ -42,6 +56,9 @@ fn parse_hex(hex: &str) -> Option<Rgb> {
 impl<'de> Deserialize<'de> for Source {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
+        if s == "path" {
+            return Ok(Source::Path);
+        }
         if let Some(hex) = s.strip_prefix('#') {
             return parse_hex(hex)
                 .map(Source::Fixed)
@@ -66,6 +83,10 @@ pub struct DeviceTarget {
     /// Razer mode: one source per segment. Empty = one segment of `color`.
     #[serde(default)]
     pub segments: Vec<Source>,
+    /// Where on screen `Source::Path` samples, split into one region per
+    /// segment (one region without razer mode).
+    #[serde(default)]
+    pub path: Option<PathConfig>,
 }
 
 fn full() -> f32 {
@@ -102,19 +123,40 @@ pub struct EngineStatus {
 }
 
 pub const EVENT_ZONES: &str = "zones";
+pub const EVENT_PATHS: &str = "paths";
+pub const EVENT_SCREEN: &str = "screen";
 pub const EVENT_STATUS: &str = "engine-status";
+
+/// One light's live path colors, for the preview.
+#[derive(Clone, Serialize)]
+struct PathColors<'a> {
+    ip: &'a str,
+    colors: &'a [Rgb],
+}
+
+/// The small frame the engine samples, for drawing paths on.
+#[derive(Clone, Serialize)]
+struct ScreenImage {
+    width: usize,
+    height: usize,
+    /// RGB, row by row, base64.
+    rgb: String,
+}
 
 /// Resend unchanged colors this often, since UDP can drop packets.
 const KEEPALIVE: Duration = Duration::from_secs(1);
 /// Skip sends when no channel moved more than this.
 const MIN_DELTA: u8 = 2;
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
+const SCREEN_INTERVAL: Duration = Duration::from_millis(250);
 
 struct Shared {
     config: Mutex<EngineConfig>,
     generation: AtomicU64,
     stop: AtomicBool,
     preview: AtomicBool,
+    /// Someone is drawing a path: capture even with sync off, and send frames.
+    screen: AtomicBool,
     /// Lights the engine leaves alone until the given time (while identifying).
     held: Mutex<Vec<(SocketAddr, Instant)>>,
 }
@@ -132,6 +174,7 @@ impl Default for Engine {
                 generation: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
                 preview: AtomicBool::new(false),
+                screen: AtomicBool::new(false),
                 held: Mutex::new(Vec::new()),
             }),
             thread: Mutex::new(None),
@@ -141,12 +184,22 @@ impl Default for Engine {
 
 impl Engine {
     pub fn apply(&self, app: &AppHandle, config: EngineConfig) {
-        let enabled = config.enabled;
         *self.shared.config.lock() = config;
         self.shared.generation.fetch_add(1, Ordering::Release);
+        self.reconcile(app);
+    }
 
+    /// Send the screen image while `on`. Keeps capture running with sync off.
+    pub fn set_screen(&self, app: &AppHandle, on: bool) {
+        self.shared.screen.store(on, Ordering::Release);
+        self.reconcile(app);
+    }
+
+    /// Run the thread while syncing or while someone wants the screen.
+    fn reconcile(&self, app: &AppHandle) {
+        let want = self.shared.config.lock().enabled || self.shared.screen.load(Ordering::Acquire);
         let mut thread = self.thread.lock();
-        if enabled && thread.as_ref().is_none_or(|t| t.is_finished()) {
+        if want && thread.as_ref().is_none_or(|t| t.is_finished()) {
             self.shared.stop.store(false, Ordering::Release);
             let shared = self.shared.clone();
             let app = app.clone();
@@ -154,7 +207,7 @@ impl Engine {
                 .name("ambient-engine".into())
                 .spawn(move || run(shared, app))
                 .ok();
-        } else if !enabled {
+        } else if !want {
             self.stop_locked(&mut thread);
         }
     }
@@ -185,6 +238,7 @@ impl Engine {
 
 struct Target {
     addr: SocketAddr,
+    ip: String,
     color: Source,
     brightness: f32,
     /// Segment sources, when this light streams in razer mode.
@@ -193,9 +247,47 @@ struct Target {
     streaming: bool,
     last: Option<Rgb>,
     sent_at: Instant,
+    path: Option<PathConfig>,
+    /// Built on the first frame, and again when the path or sizes change.
+    sampler: Option<PathSampler>,
+    /// Latest path colors from the screen, and smoothed.
+    path_target: Vec<Rgb>,
+    path_smoother: Smoother,
+    path_colors: Vec<Rgb>,
 }
 
-fn build_targets(cfg: &EngineConfig, old: &[Target]) -> Vec<Target> {
+impl Target {
+    /// Path regions: one per segment in razer mode, else one.
+    fn path_segments(&self) -> usize {
+        self.razer.as_ref().map_or(1, |s| s.len().max(1))
+    }
+
+    /// Sample the path from `f`: always when `fresh`, else only when the
+    /// sampler had to be rebuilt.
+    fn sample_path(&mut self, f: &Frame, t: &Tuning, fresh: bool) {
+        let Some(p) = &self.path else { return };
+        let n = self.path_segments();
+        let stale = !self
+            .sampler
+            .as_ref()
+            .is_some_and(|s| s.fits(n, f.width, f.height));
+        if stale {
+            self.sampler = Some(PathSampler::new(p, n, f.width, f.height));
+        }
+        if let (true, Some(s)) = (fresh || stale, self.sampler.as_mut()) {
+            s.sample(f, t, &mut self.path_target);
+        }
+    }
+
+    fn smooth_path(&mut self, dt: f32, smoothing: f32) {
+        let c = self.path_smoother.update(&self.path_target, dt, smoothing);
+        self.path_colors.clear();
+        self.path_colors.extend_from_slice(c);
+    }
+}
+
+/// Targets for `cfg`, taking state from `old` for the same lights.
+fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
     cfg.devices
         .iter()
         .filter_map(|d| {
@@ -204,17 +296,35 @@ fn build_targets(cfg: &EngineConfig, old: &[Target]) -> Vec<Target> {
                 0 => vec![d.color],
                 _ => d.segments.clone(),
             });
-            let prev = old.iter().find(|t| t.addr == addr);
-            let same = prev.filter(|p| p.color == d.color && p.razer.is_some() == d.razer);
-            Some(Target {
+            let mut t = Target {
                 addr,
+                ip: d.ip.clone(),
                 color: d.color,
                 brightness: d.brightness.max(0.0),
                 razer,
-                streaming: d.razer && prev.is_some_and(|p| p.streaming),
-                last: same.and_then(|p| p.last),
-                sent_at: prev.map_or_else(Instant::now, |p| p.sent_at),
-            })
+                streaming: false,
+                last: None,
+                sent_at: Instant::now(),
+                path: d.path.clone(),
+                sampler: None,
+                path_target: Vec::new(),
+                path_smoother: Smoother::default(),
+                path_colors: Vec::new(),
+            };
+            if let Some(p) = old.iter_mut().find(|o| o.addr == addr) {
+                t.streaming = d.razer && p.streaming;
+                if p.color == d.color && p.razer.is_some() == d.razer {
+                    t.last = p.last;
+                }
+                t.sent_at = p.sent_at;
+                // Keep path colors across edits, so a still screen doesn't go dark.
+                t.path_target = std::mem::take(&mut p.path_target);
+                t.path_smoother = std::mem::take(&mut p.path_smoother);
+                if p.path == d.path {
+                    t.sampler = p.sampler.take();
+                }
+            }
+            Some(t)
         })
         .collect()
 }
@@ -248,6 +358,53 @@ fn lower_thread_priority() {
 #[cfg(not(windows))]
 fn lower_thread_priority() {}
 
+/// The latest captured frame, tightly packed. Zones, paths and the screen
+/// image all read it, and paths can be resampled from it after an edit even
+/// when the screen is still (and no new frames arrive).
+#[derive(Default)]
+struct FrameCache {
+    data: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+impl FrameCache {
+    fn store(&mut self, f: &Frame) {
+        let row = f.width * 4;
+        self.data.clear();
+        for y in 0..f.height {
+            let start = y * f.stride;
+            self.data.extend_from_slice(&f.data[start..start + row]);
+        }
+        self.width = f.width;
+        self.height = f.height;
+    }
+
+    fn frame(&self) -> Option<Frame<'_>> {
+        (self.width > 0).then(|| Frame {
+            data: &self.data,
+            width: self.width,
+            height: self.height,
+            stride: self.width * 4,
+        })
+    }
+
+    fn image(&self) -> ScreenImage {
+        let rgb: Vec<u8> = self
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[2], p[1], p[0]])
+            .collect();
+        ScreenImage {
+            width: self.width,
+            height: self.height,
+            rgb: BASE64.encode(rgb),
+        }
+    }
+}
+
 fn run(shared: Arc<Shared>, app: AppHandle) {
     lower_thread_priority();
     let emit_status = |error: Option<String>| {
@@ -271,10 +428,14 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     let mut capturer: Option<Capturer> = None;
     let mut monitor = u32::MAX;
     let mut last_error: Option<String> = None;
+    let mut cache = FrameCache::default();
     let mut target_colors = [[0u8; 3]; Zone::COUNT];
     let mut smoother = Smoother::default();
     let mut last_tick = Instant::now();
     let mut last_preview = Instant::now() - PREVIEW_INTERVAL;
+    let mut last_screen = Instant::now() - SCREEN_INTERVAL;
+    let mut screen_dirty = false;
+    let mut screen_was_on = false;
     let mut turned_on: Vec<SocketAddr> = Vec::new();
     let mut segment_colors: Vec<Rgb> = Vec::new();
 
@@ -283,23 +444,35 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     while !shared.stop.load(Ordering::Acquire) {
         let tick = Instant::now();
 
+        // Resample when the config changes: tuning or paths may have.
+        let mut resample = false;
         let g = shared.generation.load(Ordering::Acquire);
         if g != generation {
             generation = g;
+            resample = true;
             cfg = shared.config.lock().clone();
-            let new = build_targets(&cfg, &targets);
-            for addr in stopped_streams(&targets, &new) {
+            let mut new = build_targets(&cfg, &mut targets);
+            // With sync off the thread only captures (for the path editor):
+            // hand the lights back and send nothing.
+            let sending: &[Target] = if cfg.enabled { &new } else { &[] };
+            for addr in stopped_streams(&targets, sending) {
                 sender.razer_mode(addr, false);
+            }
+            if !cfg.enabled {
+                new.iter_mut().for_each(|t| t.streaming = false);
+                turned_on.clear();
             }
             targets = new;
             if cfg.monitor != monitor {
                 monitor = cfg.monitor;
                 capturer = None;
             }
-            for t in &targets {
-                if !turned_on.contains(&t.addr) {
-                    sender.turn(t.addr, true);
-                    turned_on.push(t.addr);
+            if cfg.enabled {
+                for t in &targets {
+                    if !turned_on.contains(&t.addr) {
+                        sender.turn(t.addr, true);
+                        turned_on.push(t.addr);
+                    }
                 }
             }
         }
@@ -325,9 +498,10 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
             }
         }
 
+        let mut fresh = false;
         if let Some(c) = capturer.as_mut() {
-            match c.poll(|f| extract(f, &cfg.tuning)) {
-                Ok(Some(z)) => target_colors = z,
+            match c.poll(|f| cache.store(f)) {
+                Ok(Some(())) => fresh = true,
                 Ok(None) => {}
                 Err(CaptureError::Lost) => capturer = None,
                 Err(e) => {
@@ -336,17 +510,28 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 }
             }
         }
+        if let Some(f) = cache.frame() {
+            if fresh || resample {
+                target_colors = extract(&f, &cfg.tuning);
+            }
+            for t in &mut targets {
+                t.sample_path(&f, &cfg.tuning, fresh || resample);
+            }
+        }
 
         let dt = tick.duration_since(last_tick).as_secs_f32();
         last_tick = tick;
         let colors = smoother.update(&target_colors, dt, cfg.tuning.smoothing);
+        for t in &mut targets {
+            t.smooth_path(dt, cfg.tuning.smoothing);
+        }
 
         let held: Vec<SocketAddr> = {
             let mut h = shared.held.lock();
             h.retain(|(_, until)| *until > tick);
             h.iter().map(|(a, _)| *a).collect()
         };
-        for t in &mut targets {
+        for t in targets.iter_mut().filter(|_| cfg.enabled) {
             if held.contains(&t.addr) {
                 // Let identify's plain color commands through.
                 if t.streaming {
@@ -365,7 +550,8 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 segment_colors.extend(
                     segments
                         .iter()
-                        .map(|s| scale(s.resolve(&colors), t.brightness)),
+                        .enumerate()
+                        .map(|(i, s)| scale(s.resolve(colors, &t.path_colors, i), t.brightness)),
                 );
                 // Every frame: there's no fade to hide gaps, and it keeps the
                 // stream alive.
@@ -373,7 +559,7 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 t.sent_at = tick;
                 continue;
             }
-            let c = scale(t.color.resolve(&colors), t.brightness);
+            let c = scale(t.color.resolve(colors, &t.path_colors, 0), t.brightness);
             let due = t.last.is_none_or(|l| changed(l, c)) || t.sent_at.elapsed() >= KEEPALIVE;
             if due {
                 sender.color(t.addr, c);
@@ -385,6 +571,25 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
         if shared.preview.load(Ordering::Relaxed) && last_preview.elapsed() >= PREVIEW_INTERVAL {
             last_preview = tick;
             let _ = app.emit(EVENT_ZONES, colors);
+            let paths: Vec<PathColors> = targets
+                .iter()
+                .filter(|t| t.path.is_some())
+                .map(|t| PathColors {
+                    ip: &t.ip,
+                    colors: &t.path_colors,
+                })
+                .collect();
+            let _ = app.emit(EVENT_PATHS, paths);
+        }
+
+        let screen_on = shared.screen.load(Ordering::Relaxed);
+        screen_dirty |= fresh || (screen_on && !screen_was_on);
+        screen_was_on = screen_on;
+        if screen_on && screen_dirty && cache.width > 0 && last_screen.elapsed() >= SCREEN_INTERVAL
+        {
+            last_screen = tick;
+            screen_dirty = false;
+            let _ = app.emit(EVENT_SCREEN, cache.image());
         }
 
         if let Some(rest) = frame_time.checked_sub(tick.elapsed()) {
@@ -443,6 +648,7 @@ mod tests {
             brightness: 1.0,
             razer: false,
             segments: Vec::new(),
+            path: None,
         });
         cfg.devices.push(DeviceTarget {
             ip: "bad".into(),
@@ -450,14 +656,15 @@ mod tests {
             brightness: 1.0,
             razer: false,
             segments: Vec::new(),
+            path: None,
         });
-        let mut t = build_targets(&cfg, &[]);
+        let mut t = build_targets(&cfg, &mut []);
         assert_eq!(t.len(), 1);
         t[0].last = Some([1, 2, 3]);
-        let t2 = build_targets(&cfg, &t);
+        let mut t2 = build_targets(&cfg, &mut t);
         assert_eq!(t2[0].last, Some([1, 2, 3]));
         cfg.devices[0].color = Source::Fixed([9, 9, 9]);
-        let t3 = build_targets(&cfg, &t2);
+        let t3 = build_targets(&cfg, &mut t2);
         assert_eq!(t3[0].last, None, "color change forces resend");
     }
 
@@ -472,8 +679,83 @@ mod tests {
     fn sources_resolve() {
         let mut zones = [[0; 3]; Zone::COUNT];
         zones[Zone::Center.index()] = [1, 2, 3];
-        assert_eq!(Source::Live(Zone::Center).resolve(&zones), [1, 2, 3]);
-        assert_eq!(Source::Fixed([7, 8, 9]).resolve(&zones), [7, 8, 9]);
+        zones[Zone::All.index()] = [4, 4, 4];
+        assert_eq!(
+            Source::Live(Zone::Center).resolve(&zones, &[], 0),
+            [1, 2, 3]
+        );
+        assert_eq!(Source::Fixed([7, 8, 9]).resolve(&zones, &[], 0), [7, 8, 9]);
+        let path = [[1, 0, 0], [0, 1, 0]];
+        assert_eq!(Source::Path.resolve(&zones, &path, 1), [0, 1, 0]);
+        assert_eq!(
+            Source::Path.resolve(&zones, &path, 5),
+            [1, 0, 0],
+            "short: first"
+        );
+        assert_eq!(
+            Source::Path.resolve(&zones, &[], 0),
+            [4, 4, 4],
+            "no path: average"
+        );
+    }
+
+    fn path_cfg(points: &str, razer: bool) -> EngineConfig {
+        serde_json::from_str(&format!(
+            r#"{{"enabled":true,"fps":30,"monitor":0,"tuning":{{}},
+            "devices":[{{"ip":"10.0.0.2","color":"path","razer":{razer},
+                "segments":["path","path","path","path"],
+                "path":{{"points":{points},"width":0.2,"closed":false}}}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn path_samples_per_segment_in_razer_mode() {
+        let line = "[[0,0.5],[1,0.5]]";
+        let mut t = build_targets(&path_cfg(line, true), &mut []);
+        assert_eq!(t[0].color, Source::Path);
+        // Four vertical stripes.
+        let (w, h) = (40, 20);
+        let stripes = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+        let mut data = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                let [r, g, b] = stripes[x / 10];
+                data.extend_from_slice(&[b, g, r, 255]);
+            }
+        }
+        let f = Frame {
+            data: &data,
+            width: w,
+            height: h,
+            stride: w * 4,
+        };
+        let tuning = Tuning {
+            saturation: 1.0,
+            ..Tuning::default()
+        };
+        t[0].sample_path(&f, &tuning, true);
+        t[0].smooth_path(0.03, 0.0);
+        assert_eq!(t[0].path_colors, stripes);
+        // Without razer mode, the whole path is one region.
+        let mut single = build_targets(&path_cfg(line, false), &mut []);
+        single[0].sample_path(&f, &tuning, true);
+        assert_eq!(single[0].path_target.len(), 1);
+    }
+
+    #[test]
+    fn path_colors_survive_config_changes() {
+        let line = "[[0,0.5],[1,0.5]]";
+        let mut t = build_targets(&path_cfg(line, true), &mut []);
+        t[0].path_target = vec![[9, 9, 9]; 4];
+        let mut t2 = build_targets(&path_cfg(line, true), &mut t);
+        assert_eq!(t2[0].path_target, vec![[9, 9, 9]; 4]);
+        // A moved path drops the sampler (rebuilt on the next frame) but keeps
+        // the colors meanwhile.
+        t2[0].sampler = Some(PathSampler::new(t2[0].path.as_ref().unwrap(), 4, 10, 10));
+        let t3 = build_targets(&path_cfg("[[0,0.2],[1,0.2]]", true), &mut t2);
+        assert!(t3[0].sampler.is_none());
+        assert_eq!(t3[0].path_target.len(), 4);
     }
 
     fn razer_cfg(razer: bool) -> EngineConfig {
@@ -488,7 +770,7 @@ mod tests {
 
     #[test]
     fn razer_is_opt_in_per_light() {
-        let t = build_targets(&razer_cfg(true), &[]);
+        let t = build_targets(&razer_cfg(true), &mut []);
         let segs = t[0].razer.as_ref().unwrap();
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[2], Source::Fixed([255, 0, 0]));
@@ -498,21 +780,21 @@ mod tests {
 
     #[test]
     fn razer_off_or_removed_stops_the_stream() {
-        let mut t = build_targets(&razer_cfg(true), &[]);
+        let mut t = build_targets(&razer_cfg(true), &mut []);
         t[0].streaming = true;
-        let kept = build_targets(&razer_cfg(true), &t);
+        let kept = build_targets(&razer_cfg(true), &mut t);
         assert!(kept[0].streaming);
         assert!(stopped_streams(&t, &kept).is_empty());
-        let off = build_targets(&razer_cfg(false), &t);
+        let off = build_targets(&razer_cfg(false), &mut t);
         assert_eq!(stopped_streams(&t, &off), [t[0].addr]);
         assert_eq!(stopped_streams(&t, &[]), [t[0].addr]);
     }
 
     #[test]
     fn toggling_razer_forces_resend() {
-        let mut t = build_targets(&razer_cfg(false), &[]);
+        let mut t = build_targets(&razer_cfg(false), &mut []);
         t[0].last = Some([1, 2, 3]);
-        assert_eq!(build_targets(&razer_cfg(true), &t)[0].last, None);
+        assert_eq!(build_targets(&razer_cfg(true), &mut t)[0].last, None);
     }
 
     #[test]

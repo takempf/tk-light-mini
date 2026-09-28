@@ -105,8 +105,9 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
+/// Weighted color average for one region.
 #[derive(Default, Clone, Copy)]
-struct Acc {
+pub(crate) struct Acc {
     r: f32,
     g: f32,
     b: f32,
@@ -118,7 +119,8 @@ struct Acc {
 
 impl Acc {
     #[inline(always)]
-    fn add(&mut self, lin: [f32; 3], v_lin: f32, w: f32) {
+    pub(crate) fn add(&mut self, px: Px) {
+        let Px { lin, v_lin, w } = px;
         self.r += lin[0] * w;
         self.g += lin[1] * w;
         self.b += lin[2] * w;
@@ -128,7 +130,7 @@ impl Acc {
         self.n += 1;
     }
 
-    fn finish(&self, t: &Tuning) -> Rgb {
+    pub(crate) fn finish(&self, t: &Tuning) -> Rgb {
         if self.n == 0 || self.w < 1e-6 {
             return [0, 0, 0];
         }
@@ -156,6 +158,39 @@ impl Acc {
             out[i] = (ch.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         }
         out
+    }
+}
+
+/// One pixel, ready to accumulate.
+#[derive(Clone, Copy)]
+pub(crate) struct Px {
+    /// Linear RGB.
+    lin: [f32; 3],
+    /// Linear brightness (max channel).
+    v_lin: f32,
+    /// Weight: bright, saturated pixels count more.
+    w: f32,
+}
+
+/// Read pixel `(x, y)` of a BGRA frame.
+#[inline(always)]
+pub(crate) fn read_px(frame: &Frame, x: usize, y: usize) -> Px {
+    let lut = srgb_to_linear_lut();
+    let i = y * frame.stride + x * 4;
+    let (b, g, r) = (frame.data[i], frame.data[i + 1], frame.data[i + 2]);
+    let hi = r.max(g).max(b);
+    let lo = r.min(g).min(b);
+    let w = if hi == 0 {
+        0.0
+    } else {
+        let v = hi as f32 / 255.0;
+        let sat = (hi - lo) as f32 / hi as f32;
+        v * v + 2.0 * sat * v
+    };
+    Px {
+        lin: [lut[r as usize], lut[g as usize], lut[b as usize]],
+        v_lin: lut[hi as usize],
+        w,
     }
 }
 
@@ -225,7 +260,6 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
     if frame.width == 0 || frame.height == 0 {
         return [[0; 3]; Zone::COUNT];
     }
-    let lut = srgb_to_linear_lut();
     let (x0, y0, x1, y1) = content_rect(frame);
     let depth = t.depth.clamp(0.02, 0.5);
     let band_h = (((y1 - y0) as f32 * depth) as usize).max(1);
@@ -242,26 +276,13 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
         let bottom = y >= bottom_start;
         let d_top = (y - y0) as f32 * inv_h;
         let d_bottom = (y1 - 1 - y) as f32 * inv_h;
-        let row = y * frame.stride;
         for x in x0..x1 {
-            let i = row + x * 4;
-            let (b, g, r) = (frame.data[i], frame.data[i + 1], frame.data[i + 2]);
-            let hi = r.max(g).max(b);
-            let lo = r.min(g).min(b);
-            let lin = [lut[r as usize], lut[g as usize], lut[b as usize]];
-            let v_lin = lut[hi as usize];
-            let w = if hi == 0 {
-                0.0
-            } else {
-                let v = hi as f32 / 255.0;
-                let sat = (hi - lo) as f32 / hi as f32;
-                v * v + 2.0 * sat * v
-            };
-            acc[4].add(lin, v_lin, w);
+            let p = read_px(frame, x, y);
+            acc[4].add(p);
             let left = x < left_end;
             let right = x >= right_start;
             if !(top || bottom || left || right) {
-                acc[5].add(lin, v_lin, w);
+                acc[5].add(p);
                 continue;
             }
             let mut side = 0;
@@ -277,43 +298,38 @@ pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
                     nearest = d;
                 }
             }
-            acc[side].add(lin, v_lin, w);
+            acc[side].add(p);
         }
     }
     acc.map(|a| a.finish(t))
 }
 
-/// Frame-rate independent exponential smoothing for the zone colors.
+/// Frame-rate independent exponential smoothing for a list of colors.
 #[derive(Clone, Debug, Default)]
 pub struct Smoother {
-    state: [[f32; 3]; Zone::COUNT],
-    primed: bool,
+    state: Vec<[f32; 3]>,
+    out: Vec<Rgb>,
 }
 
 impl Smoother {
-    /// `smoothing` in 0..1 maps to a time constant of 0..0.6s.
-    pub fn update(
-        &mut self,
-        target: &[Rgb; Zone::COUNT],
-        dt: f32,
-        smoothing: f32,
-    ) -> [Rgb; Zone::COUNT] {
+    /// `smoothing` in 0..1 maps to a time constant of 0..0.6s. The first
+    /// update, or one with a new length, jumps straight to `target`.
+    pub fn update(&mut self, target: &[Rgb], dt: f32, smoothing: f32) -> &[Rgb] {
         let tau = smoothing.clamp(0.0, 1.0) * 0.6;
-        let alpha = if !self.primed || tau <= 1e-4 {
+        let alpha = if self.state.len() != target.len() || tau <= 1e-4 {
+            self.state.resize(target.len(), [0.0; 3]);
+            self.out.resize(target.len(), [0; 3]);
             1.0
         } else {
             1.0 - (-dt.max(0.0) / tau).exp()
         };
-        self.primed = true;
-        let mut out = [[0u8; 3]; Zone::COUNT];
-        for z in 0..Zone::COUNT {
+        for ((s, t), o) in self.state.iter_mut().zip(target).zip(&mut self.out) {
             for c in 0..3 {
-                let s = &mut self.state[z][c];
-                *s += (target[z][c] as f32 - *s) * alpha;
-                out[z][c] = (*s + 0.5).clamp(0.0, 255.0) as u8;
+                s[c] += (t[c] as f32 - s[c]) * alpha;
+                o[c] = (s[c] + 0.5).clamp(0.0, 255.0) as u8;
             }
         }
-        out
+        &self.out
     }
 }
 

@@ -1,6 +1,7 @@
 mod capture;
 mod engine;
 mod govee;
+mod paths;
 #[cfg(test)]
 mod ptreal;
 mod zones;
@@ -33,6 +34,13 @@ fn set_config(app: AppHandle, engine: State<'_, Engine>, config: EngineConfig) {
 #[tauri::command]
 fn set_preview(engine: State<'_, Engine>, enabled: bool) {
     engine.set_preview(enabled);
+}
+
+/// Send the small screen frame while a path is being drawn. Keeps capture
+/// running even with sync off.
+#[tauri::command]
+fn set_screen_preview(app: AppHandle, engine: State<'_, Engine>, enabled: bool) {
+    engine.set_screen(&app, enabled);
 }
 
 /// Pulse a light so the user can tell which one it is. The engine leaves it
@@ -97,6 +105,7 @@ pub fn run() {
             list_monitors,
             set_config,
             set_preview,
+            set_screen_preview,
             identify_device,
             set_power,
             lights_off
