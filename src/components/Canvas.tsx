@@ -9,6 +9,7 @@ import {
   movePath,
   movePoints,
   pointsIn,
+  reach,
   removePoints,
   resolvePath,
   splitPath,
@@ -442,21 +443,45 @@ export function Canvas() {
     ...placed.filter((p) => p !== current).flatMap((p) => p.path.points),
     ...(editing?.points.filter((_, i) => !skip.includes(i)) ?? []),
   ];
+  /** How far a band reaches past each of its points, in pixels. */
+  const reachOf = (path: LightPath): Pt[] =>
+    reach(
+      path.points.map(([x, y]) => [x * w, y * h] as Pt),
+      path.closed,
+      (path.width * h) / 2,
+    );
   /** Other bands' edges, to line up with. */
   const others = placed.filter((p) => p !== current);
+  const edges = others.map((p) => ({ p, r: reachOf(p.path) }));
   const lines = {
-    x: others.flatMap((p) => {
-      const r = (p.path.width * h) / 2 / w;
-      return p.path.points.flatMap(([x]) => [x - r, x + r]);
-    }),
-    y: others.flatMap((p) => {
-      const r = p.path.width / 2;
-      return p.path.points.flatMap(([, y]) => [y - r, y + r]);
-    }),
+    x: edges.flatMap(({ p, r }) =>
+      p.path.points.flatMap(([x], i) => {
+        const e = (r[i] as Pt)[0] / w;
+        return [x - e, x + e];
+      }),
+    ),
+    y: edges.flatMap(({ p, r }) =>
+      p.path.points.flatMap(([, y], i) => {
+        const e = (r[i] as Pt)[1] / h;
+        return [y - e, y + e];
+      }),
+    ),
   };
-  /** Half the edited band's thickness, in pixels: its edges snap too. */
-  const edge = ((editing?.width ?? 0) * h) / 2;
-  const snap = (e: React.PointerEvent, from: Pt | undefined, skip: readonly number[]) => {
+  /** How far a new end at the pointer would reach: square, across the line from `from`. */
+  const endReach = (e: React.PointerEvent, from: Pt | undefined): Pt => {
+    const r = ((editing?.width ?? 0) * h) / 2;
+    if (!from) return [r, r];
+    const p = at(e);
+    return reach(
+      [
+        [from[0] * w, from[1] * h],
+        [p[0] * w, p[1] * h],
+      ],
+      false,
+      r,
+    )[1] as Pt;
+  };
+  const snap = (e: React.PointerEvent, from: Pt | undefined, skip: readonly number[], edge: Pt) => {
     const r = snapPoint(at(e), {
       from,
       shift: e.shiftKey,
@@ -492,13 +517,14 @@ export function Canvas() {
     }
     if (e.button !== 0) return;
     const pts = editing?.points ?? [];
+    const end = pts[pts.length - 1];
     if (drawing && editing) {
-      update({ ...editing, points: [...pts, snap(e, pts[pts.length - 1], [])] });
+      update({ ...editing, points: [...pts, snap(e, end, [], endReach(e, end))] });
       return;
     }
     if ((e.ctrlKey || e.metaKey) && editing) {
       breakUndo();
-      update({ ...editing, points: [...pts, snap(e, pts[pts.length - 1], [])] });
+      update({ ...editing, points: [...pts, snap(e, end, [], endReach(e, end))] });
       setPoints([pts.length]);
       return;
     }
@@ -522,8 +548,8 @@ export function Canvas() {
       return;
     }
     if (drawing && editing) {
-      const pts = editing.points;
-      setCursor(snap(e, pts[pts.length - 1], []));
+      const end = editing.points[editing.points.length - 1];
+      setCursor(snap(e, end, [], endReach(e, end)));
       return;
     }
     if (!drag) {
@@ -538,7 +564,12 @@ export function Canvas() {
     } else if (drag.kind === "points") {
       if (drag.indices.length === 1) {
         // One point: Shift keeps its leg at 0/45/90 degrees.
-        const q = snap(e, neighbor(drag.orig, drag.grab), drag.indices);
+        const q = snap(
+          e,
+          neighbor(drag.orig, drag.grab),
+          drag.indices,
+          reachOf(drag.orig)[drag.grab] as Pt,
+        );
         update({ ...drag.orig, points: drag.orig.points.map((o, i) => (i === drag.grab ? q : o)) });
       } else {
         const r = snapMove(
@@ -549,7 +580,7 @@ export function Canvas() {
             guides: !e.altKey,
             targets: targets(drag.indices),
             lines,
-            edge,
+            edges: reachOf(drag.orig).filter((_, i) => drag.indices.includes(i)),
             w,
             h,
             tol: SNAP,
@@ -564,7 +595,7 @@ export function Canvas() {
         guides: !e.altKey,
         targets: others.flatMap((x) => x.path.points),
         lines,
-        edge: (drag.orig.width * h) / 2,
+        edges: reachOf(drag.orig),
         w,
         h,
         tol: SNAP,

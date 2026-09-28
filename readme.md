@@ -29,7 +29,7 @@ The big screen shows every light as a band over a live copy of your screen, with
 - **Exact spots:** with one point picked, type its X and Y. On a loop, **Start here** makes it the first point.
 - **Draw from scratch:** **Draw**, then click out the points. **Backspace** takes back the last one, and clicking the first point closes the loop. Double-click, **Enter** or **Done drawing** finishes.
 - **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place. **Flip** mirrors a path across the middle, handy for a pair of bars.
-- **Thickness** sets how wide a band of the picture the light looks at.
+- **Thickness** sets how wide a band of the picture the light looks at. An open band's ends are cut square, and the light looks only inside the band as drawn.
 - **Horizontal** and **Vertical** set how a path sizes to the screen on each axis. **Exact** keeps it where its points are. **Fit** stretches it to fill the screen, with the band's edges flush against the screen's edges. **Auto** scales it along with the other axis (when that one is on Fit), so the shape keeps its proportions, even on a screen of another shape. **Edge loop** fits both ways.
 - Points snap to other points and to the screen's edges and middle, with a guide line. A band's edges snap too, so it can sit flush inside the screen's edge or right against another band. Hold **Shift** while dragging a single point to keep its line at 0, 45 or 90 degrees, and **Alt** to turn snapping off.
 - **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Shift+Z**) cover placement, sections and colors. **Shortcuts** above the screen lists all of these.

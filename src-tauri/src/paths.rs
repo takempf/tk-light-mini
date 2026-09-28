@@ -3,7 +3,8 @@
 //!
 //! Each pixel within half the thickness of the path goes to the nearest point
 //! on it. How far along the path that point is picks the segment, so pixels at
-//! a corner count once, for the nearer leg.
+//! a corner count once, for the nearer leg. An open path's ends are cut square,
+//! the way it's drawn: nothing past its first or last point counts.
 //!
 //! Paths are drawn over the whole screen but laid over the picture: with
 //! letterbox bars, a path along the screen edge follows the picture's edge.
@@ -29,6 +30,8 @@ struct Geometry {
     pts: Vec<[f32; 2]>,
     /// `lens[i]` = length along the path to `pts[i]`.
     lens: Vec<f32>,
+    /// Has ends, cut square.
+    open: bool,
 }
 
 impl Geometry {
@@ -44,7 +47,8 @@ impl Geometry {
                 ]
             })
             .collect();
-        if p.closed && pts.len() > 2 {
+        let open = !(p.closed && pts.len() > 2);
+        if !open {
             pts.push(pts[0]);
         }
         let mut lens = Vec::with_capacity(pts.len());
@@ -55,38 +59,48 @@ impl Geometry {
             }
             lens.push(total);
         }
-        Self { pts, lens }
+        Self { pts, lens, open }
     }
 
     fn total(&self) -> f32 {
         self.lens.last().copied().unwrap_or(0.0)
     }
 
-    /// Squared distance from `c` to the path, and how far along it the nearest
-    /// point is.
-    fn nearest(&self, c: [f32; 2]) -> (f32, f32) {
+    /// Squared distance from `c` to the path, how far along it the nearest
+    /// point is, and whether `c` is past one of its ends.
+    fn nearest(&self, c: [f32; 2]) -> (f32, f32, bool) {
+        let last = self.pts.len().saturating_sub(2);
         match self.pts.len() {
-            0 => (f32::MAX, 0.0),
-            1 => (dist2(c, self.pts[0]), 0.0),
+            0 => (f32::MAX, 0.0, false),
+            1 => (dist2(c, self.pts[0]), 0.0, false),
             _ => self
                 .pts
                 .windows(2)
                 .zip(&self.lens)
-                .map(|(ab, &start)| {
+                .enumerate()
+                .map(|(i, (ab, &start))| {
                     let (a, b) = (ab[0], ab[1]);
                     let ab = [b[0] - a[0], b[1] - a[1]];
                     let len2 = ab[0] * ab[0] + ab[1] * ab[1];
-                    let u = if len2 > 0.0 {
-                        (((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1]) / len2).clamp(0.0, 1.0)
+                    let raw = if len2 > 0.0 {
+                        ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1]) / len2
                     } else {
                         0.0
                     };
+                    let past = self.open && ((i == 0 && raw < 0.0) || (i == last && raw > 1.0));
+                    let u = raw.clamp(0.0, 1.0);
                     let q = [a[0] + ab[0] * u, a[1] + ab[1] * u];
-                    (dist2(c, q), start + u * len2.sqrt())
+                    (dist2(c, q), start + u * len2.sqrt(), past)
                 })
                 .fold(
-                    (f32::MAX, 0.0),
-                    |best, x| if x.0 < best.0 { x } else { best },
+                    (f32::MAX, 0.0, false),
+                    |best, x| {
+                        if x.0 < best.0 {
+                            x
+                        } else {
+                            best
+                        }
+                    },
                 ),
         }
     }
@@ -142,8 +156,8 @@ impl PathSampler {
         if !g.pts.is_empty() {
             for y in rect.y0..rect.y1 {
                 for x in rect.x0..rect.x1 {
-                    let (d2, at) = g.nearest([x as f32 + 0.5, y as f32 + 0.5]);
-                    if d2 <= r * r {
+                    let (d2, at, past) = g.nearest([x as f32 + 0.5, y as f32 + 0.5]);
+                    if d2 <= r * r && !past {
                         let s = segment_at(at, total, n);
                         hit[s] = true;
                         pixels.push((x as u16, y as u16, s as u16));
@@ -293,6 +307,21 @@ mod tests {
         assert_eq!(segs.len(), 8, "every segment has pixels");
         // The middle of the screen is outside the path.
         assert!(!seen.contains(&(40, 20)));
+    }
+
+    #[test]
+    fn open_ends_are_cut_square() {
+        // A thick line across the middle, from 0.2 to 0.8 of the width.
+        let (w, h) = (100, 50);
+        let p = line(&[[0.2, 0.5], [0.8, 0.5]], 0.8, false);
+        let s = PathSampler::new(&p, 1, w, h, full(w, h));
+        let xs: Vec<u16> = s.pixels.iter().map(|p| p.0).collect();
+        assert_eq!(xs.iter().min(), Some(&20));
+        assert_eq!(xs.iter().max(), Some(&79));
+        // A loop has no ends: its corners are round.
+        let square = line(&[[0.3, 0.3], [0.7, 0.3], [0.7, 0.7], [0.3, 0.7]], 0.2, true);
+        let s = PathSampler::new(&square, 1, w, h, full(w, h));
+        assert!(s.pixels.iter().any(|p| p.0 < 30));
     }
 
     #[test]

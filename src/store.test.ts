@@ -227,9 +227,9 @@ describe("fit", () => {
       closed: false,
       fit: { x: "fit", y: "exact" },
     });
-    // On a 2:1 screen the band's ends sit 0.1 heights in: 0.05 of the width.
+    // Its square ends run right to the screen's edges.
     const path = toEngineConfig(useStore.getState(), 2).devices[0]?.sections[0]?.path;
-    expect(path?.points.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.05, 0.95]);
+    expect(path?.points.map(([x]) => x)).toEqual([0, 1]);
     expect(path?.points.map(([, y]) => y)).toEqual([0.5, 0.5]);
   });
 });

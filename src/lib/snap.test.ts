@@ -95,6 +95,27 @@ describe("band edges", () => {
     expect(r.guides).toEqual({ x: 0 });
   });
 
+  it("snaps a square end by its middle along the line", () => {
+    // A flat line's end reaches up and down, not sideways.
+    const r = snapPoint([0.02, 0.3], { ...base, edge: [0, 5] });
+    expect(r.point[0]).toBe(0);
+    const moved = snapMove(
+      [
+        [0.02, 0.3],
+        [0.4, 0.3],
+      ],
+      [0, 0],
+      {
+        ...base,
+        edges: [
+          [0, 5],
+          [5, 5],
+        ],
+      },
+    );
+    expect(moved.delta[0]).toBeCloseTo(-0.02);
+  });
+
   it("lines up with another band's edge", () => {
     const r = snapPoint([0.3, 0.36], { ...edge, lines: { y: [0.3] } });
     expect(r.point[1]).toBeCloseTo(0.35);

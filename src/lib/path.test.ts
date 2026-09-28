@@ -227,43 +227,78 @@ describe("labelPoint", () => {
 });
 
 describe("resolvePath", () => {
-  // A 2:1 screen. A diagonal band 0.1 thick: its edges are 0.05 screen heights out.
-  const diag = {
+  // A 2:1 screen. An L 0.1 thick: along the top, then down. Its corner reaches
+  // 0.05 screen heights every way; its square ends reach only across the line.
+  const ell = {
     points: [
       [0.3, 0.4],
+      [0.5, 0.4],
       [0.5, 0.6],
     ] as [number, number][],
     width: 0.1,
     closed: false,
   };
+  const diag = { ...ell, points: [ell.points[0], ell.points[2]] as [number, number][] };
   const at = (p: ReturnType<typeof resolvePath>, i: number) =>
     p.points[i]?.map((v) => Math.round(v * 1000) / 1000);
 
   it("leaves exact paths alone", () => {
-    expect(resolvePath(diag, 2)).toBe(diag);
+    expect(resolvePath(ell, 2)).toBe(ell);
     // Auto with nothing to follow is exact too.
-    const auto = { ...diag, fit: { x: "exact", y: "auto" } as const };
+    const auto = { ...ell, fit: { x: "exact", y: "auto" } as const };
     expect(resolvePath(auto, 2)).toBe(auto);
   });
 
   it("fills an axis, band edges flush with the screen", () => {
-    const p = resolvePath({ ...diag, fit: { x: "fit", y: "exact" } }, 2);
-    // 0.05 heights in from each side is 0.025 of the width.
-    expect(at(p, 0)).toEqual([0.025, 0.4]);
-    expect(at(p, 1)).toEqual([0.975, 0.6]);
+    const p = resolvePath({ ...ell, fit: { x: "fit", y: "exact" } }, 2);
+    // The square start sits on the left edge. The corner and the end going
+    // down reach 0.05 heights right: 0.025 of the width.
+    expect(at(p, 0)).toEqual([0, 0.4]);
+    expect(at(p, 1)).toEqual([0.975, 0.4]);
+    expect(at(p, 2)).toEqual([0.975, 0.6]);
+  });
+
+  it("runs a flat line's square ends right to the edges", () => {
+    const flat = {
+      points: [
+        [0.3, 0.5],
+        [0.6, 0.5],
+      ] as [number, number][],
+      width: 0.4,
+      closed: false,
+      fit: { x: "fit", y: "exact" } as const,
+    };
+    expect(resolvePath(flat, 2).points).toEqual([
+      [0, 0.5],
+      [1, 0.5],
+    ]);
   });
 
   it("scales the other axis with it on auto, about the middle", () => {
-    const p = resolvePath({ ...diag, fit: { x: "fit", y: "auto" } }, 2);
-    // Width 0.4 heights becomes 1.9: 4.75 times. The height 0.2 becomes 0.95.
-    expect(at(p, 0)).toEqual([0.025, 0.025]);
-    expect(at(p, 1)).toEqual([0.975, 0.975]);
+    const p = resolvePath({ ...ell, fit: { x: "fit", y: "auto" } }, 2);
+    // Width 0.4 heights becomes 1.95: 4.875 times. So does the height 0.2.
+    expect(p.points[0]?.[1]).toBeCloseTo(0.5 - 0.1 * 4.875);
+    expect(p.points[2]?.[1]).toBeCloseTo(0.5 + 0.1 * 4.875);
   });
 
   it("fits both ways on its own", () => {
+    const p = resolvePath({ ...ell, fit: { x: "fit", y: "fit" } }, 2);
+    // The top reaches up 0.05; the square end at the bottom doesn't reach down.
+    expect(at(p, 0)).toEqual([0, 0.05]);
+    expect(at(p, 2)).toEqual([0.975, 1]);
+  });
+
+  it("settles a slanted end's corners inside the screen", () => {
     const p = resolvePath({ ...diag, fit: { x: "fit", y: "fit" } }, 2);
-    expect(at(p, 0)).toEqual([0.025, 0.05]);
-    expect(at(p, 1)).toEqual([0.975, 0.95]);
+    const [[ax, ay], [bx, by]] = p.points as [[number, number], [number, number]];
+    // Each square end's outer corner, in screen heights on the 2:1 screen.
+    const [dx, dy] = [(bx - ax) * 2, by - ay];
+    const len = Math.hypot(dx, dy);
+    const [nx, ny] = [(0.05 * dy) / len, (0.05 * dx) / len];
+    expect(ax * 2 - nx).toBeGreaterThan(-0.002);
+    expect(ay - ny).toBeGreaterThan(-0.002);
+    expect(bx * 2 + nx).toBeLessThan(2.002);
+    expect(by + ny).toBeLessThan(1.002);
   });
 
   it("keeps proportions on a screen of another shape", () => {
@@ -285,7 +320,7 @@ describe("resolvePath", () => {
   });
 
   it("maps an edit on screen back into the saved shape", () => {
-    const saved = { ...diag, fit: { x: "fit", y: "auto" } as const, aspect: 2 };
+    const saved = { ...ell, fit: { x: "fit", y: "auto" } as const, aspect: 2 };
     const shown = resolvePath(saved, 2);
     // Nothing changed: the saved shape comes back.
     const same = unresolvePath(shown, saved, 2);
@@ -296,11 +331,11 @@ describe("resolvePath", () => {
     // A point added on screen lands where it shows.
     const more = { ...shown, points: [...shown.points, [0.5, 0.5] as [number, number]] };
     const back = resolvePath(unresolvePath(more, saved, 2), 2);
-    expect(at(back, 2)).toEqual([0.5, 0.5]);
+    expect(at(back, 3)).toEqual([0.5, 0.5]);
   });
 
   it("leaves exact edits as they are", () => {
-    const edited = { ...diag, points: [[0.1, 0.1]] as [number, number][] };
-    expect(unresolvePath(edited, diag, 2)).toBe(edited);
+    const edited = { ...ell, points: [[0.1, 0.1]] as [number, number][] };
+    expect(unresolvePath(edited, ell, 2)).toBe(edited);
   });
 });

@@ -484,36 +484,37 @@ describe("Canvas", () => {
   });
 
   it("fits a path to the screen on each axis", () => {
-    const line = {
+    // An L, 0.1 thick: along, then down. Its square start reaches only up and
+    // down; its corner and square end reach 5px right.
+    selected({
       points: [
         [0.4, 0.4],
+        [0.6, 0.4],
         [0.6, 0.6],
-      ] as [number, number][],
+      ],
       width: 0.1,
       closed: false,
-    };
-    selected(line);
+    });
     render(<App />);
     const engine = () => lastDevice()?.sections[0]?.path?.points;
+    const xs = () => engine()?.map(([x]) => Math.round(x * 1000) / 1000);
     expect(screen.getByRole("button", { name: "Horizontal: Exact" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     fireEvent.click(screen.getByRole("button", { name: "Horizontal: Fit" }));
-    // Band edges flush left and right: 0.05 heights in is 0.025 of the width.
-    expect(engine()?.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.025, 0.975]);
-    expect(engine()?.map(([, y]) => y)).toEqual([0.4, 0.6]);
+    expect(xs()).toEqual([0, 0.975, 0.975]);
+    expect(engine()?.map(([, y]) => y)).toEqual([0.4, 0.4, 0.6]);
     expect(screen.queryByText(/Auto follows/)).toBeNull();
-    // Auto scales the height with the width. The line was 40x20px; it stays
-    // twice as wide as it is tall, now 190x95px.
+    // Auto scales the height with the width. The L was 40x20px; it stays
+    // twice as wide as it is tall, now 195x97.5px.
     fireEvent.click(screen.getByRole("button", { name: "Vertical: Auto" }));
-    const [a, b] = engine() ?? [];
-    expect(((b?.[0] ?? 0) - (a?.[0] ?? 0)) * 200).toBeCloseTo(190);
-    expect(((b?.[1] ?? 0) - (a?.[1] ?? 0)) * 100).toBeCloseTo(95);
+    const height = () => ((engine()?.[2]?.[1] ?? 0) - (engine()?.[0]?.[1] ?? 0)) * 100;
+    expect(height()).toBeCloseTo(97.5);
     // The order doesn't matter: Auto first, then Fit, gives the same.
     fireEvent.click(screen.getByRole("button", { name: "Horizontal: Exact" }));
     fireEvent.click(screen.getByRole("button", { name: "Horizontal: Fit" }));
-    expect(((engine()?.[1]?.[1] ?? 0) - (engine()?.[0]?.[1] ?? 0)) * 100).toBeCloseTo(95);
+    expect(height()).toBeCloseTo(97.5);
     // Auto next to Exact does nothing, and says so.
     fireEvent.click(screen.getByRole("button", { name: "Horizontal: Exact" }));
     expect(screen.getByText(/Auto follows/)).toBeInTheDocument();
@@ -532,12 +533,12 @@ describe("Canvas", () => {
     });
     render(<App />);
     const svg = layout();
-    // Shown flush left and right, 5px in.
+    // Shown edge to edge: its square ends reach nothing along the line.
     fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 50 });
     fireEvent.pointerMove(svg, { clientX: 130, clientY: 70, altKey: true });
     fireEvent.pointerUp(svg);
     const shown = lastDevice()?.sections[0]?.path?.points;
-    expect(shown?.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.025, 0.975]);
+    expect(shown?.map(([x]) => x)).toEqual([0, 1]);
     expect(shown?.map(([, y]) => Math.round(y * 1000) / 1000)).toEqual([0.7, 0.7]);
   });
 });

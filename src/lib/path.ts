@@ -240,6 +240,31 @@ interface FitMap {
 }
 
 /**
+ * How far the band reaches past each point on each axis, for points `pts` and
+ * half thickness `r`. Corners are round, so they reach `r` every way. An open
+ * path's ends are cut square: they reach only across the line, not along it.
+ */
+export function reach(pts: readonly Pt[], closed: boolean, r: number): Pt[] {
+  const n = pts.length;
+  const open = !(closed && n > 2);
+  return pts.map((_, i) => {
+    if (!open || n < 2 || (i > 0 && i < n - 1)) return [r, r];
+    const [a, b] = i === 0 ? [pts[0], pts[1]] : [pts[n - 2], pts[n - 1]];
+    const [dx, dy] = [(b as Pt)[0] - (a as Pt)[0], (b as Pt)[1] - (a as Pt)[1]];
+    const len = Math.hypot(dx, dy);
+    return len > 0 ? [(r * Math.abs(dy)) / len, (r * Math.abs(dx)) / len] : [r, r];
+  });
+}
+
+/** Per axis in screen heights: placed = saved * s + t. */
+interface Scale {
+  sx: number;
+  tx: number;
+  sy: number;
+  ty: number;
+}
+
+/**
  * How a saved path maps onto a screen `aspect` wide (width over height), or
  * undefined when it stays where it is.
  */
@@ -249,29 +274,44 @@ function fitMap(p: LightPath, aspect: number): FitMap | undefined {
   if ((fx !== "fit" && fy !== "fit") || p.points.length === 0) return undefined;
   // Units of screen heights, so both axes measure the same.
   const from = p.aspect ?? aspect;
-  const xs = p.points.map(([x]) => x * from);
-  const ys = p.points.map(([, y]) => y);
+  const pts = p.points.map(([x, y]) => [x * from, y] as Pt);
+  const xs = pts.map(([x]) => x);
+  const ys = pts.map(([, y]) => y);
   const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
   const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
-  // The band's edges sit on the screen's edges.
   const r = Math.min(p.width / 2, aspect / 2, 0.5);
-  const sx = fx === "fit" && x1 > x0 ? (aspect - 2 * r) / (x1 - x0) : undefined;
-  const sy = fy === "fit" && y1 > y0 ? (1 - 2 * r) / (y1 - y0) : undefined;
-  // Auto follows the other axis's scale, about the shape's middle.
-  const ax = fx === "auto" ? sy : undefined;
-  const ay = fy === "auto" ? sx : undefined;
-  const mx = (x0 + x1) / 2;
-  const cx = (mx / from) * aspect;
-  const cy = (y0 + y1) / 2;
-  const [kx, bx] =
-    sx !== undefined
-      ? [(from * sx) / aspect, (r - x0 * sx) / aspect]
-      : ax !== undefined
-        ? [(from * ax) / aspect, (cx - mx * ax) / aspect]
-        : [1, 0];
-  const [ky, by] =
-    sy !== undefined ? [sy, r - y0 * sy] : ay !== undefined ? [ay, cy * (1 - ay)] : [1, 0];
-  return { kx, bx, ky, by };
+
+  /** The scale that puts the band's outline, reaching `ext` past each point, on the screen's edges. */
+  const solve = (ext: Pt[]): Scale => {
+    /** How far past the lowest and highest points the band reaches, on one axis. */
+    const ends = (vs: number[], axis: 0 | 1, lo: number, hi: number) => {
+      const past = (at: number) =>
+        Math.max(...vs.flatMap((v, i) => (v === at ? [(ext[i] as Pt)[axis]] : [])));
+      return [past(lo), past(hi)] as const;
+    };
+    const [l, rr] = ends(xs, 0, x0, x1);
+    const [t, b] = ends(ys, 1, y0, y1);
+    const sxFit = fx === "fit" && x1 > x0 ? (aspect - l - rr) / (x1 - x0) : undefined;
+    const syFit = fy === "fit" && y1 > y0 ? (1 - t - b) / (y1 - y0) : undefined;
+    // Auto follows the other axis's scale, about the shape's middle.
+    const [mx, cy] = [(x0 + x1) / 2, (y0 + y1) / 2];
+    const cx = (mx / from) * aspect;
+    const sx = sxFit ?? (fx === "auto" ? syFit : undefined);
+    const sy = syFit ?? (fy === "auto" ? sxFit : undefined);
+    return {
+      sx: sx ?? aspect / from,
+      tx: sxFit !== undefined ? l - sxFit * x0 : sx !== undefined ? cx - sx * mx : 0,
+      sy: sy ?? 1,
+      ty: syFit !== undefined ? t - syFit * y0 : sy !== undefined ? cy - sy * cy : 0,
+    };
+  };
+
+  // Stretching one axis turns the ends, which moves their corners: solve again
+  // with the ends as placed.
+  let m = solve(reach(pts, p.closed, r));
+  const placed = pts.map(([x, y]) => [x * m.sx + m.tx, y * m.sy + m.ty] as Pt);
+  m = solve(reach(placed, p.closed, r));
+  return { kx: (m.sx * from) / aspect, bx: m.tx / aspect, ky: m.sy, by: m.ty };
 }
 
 /**

@@ -15,10 +15,12 @@ interface SnapTargets {
   /** More lines to snap to, in screen fractions: other bands' edges. */
   lines?: { x?: readonly number[]; y?: readonly number[] };
   /**
-   * Half the thickness of the band being placed, in pixels. Its edges snap as
-   * well as its middle, so a band can sit flush with the screen's edge.
+   * How far the band being placed reaches past its middle, in pixels: half
+   * its thickness, or `[x, y]` when that differs (a square end reaches only
+   * across the line). Its edges snap as well as its middle, so a band can sit
+   * flush with the screen's edge.
    */
-  edge?: number;
+  edge?: number | Pt;
   /** The screen's size on the page, in pixels. */
   w: number;
   h: number;
@@ -36,7 +38,12 @@ export interface SnapOptions extends SnapTargets {
 export interface MoveOptions extends SnapTargets {
   /** Lock the move to horizontal or vertical. */
   shift?: boolean;
+  /** `edge` for each moved point, when they differ. */
+  edges?: readonly Pt[];
 }
+
+const perAxis = (e: number | Pt | undefined): Pt =>
+  typeof e === "number" ? [e, e] : (e ?? [0, 0]);
 
 /** Lines everything can snap to: the edges and the middle. */
 const FRAME = [0, 0.5, 1];
@@ -79,7 +86,7 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
  */
 export function snapPoint(p: Pt, o: SnapOptions): { point: Pt; guides: Guides } {
   const { w, h, tol } = o;
-  const edge = o.edge ?? 0;
+  const [ex, ey] = perAxis(o.edge);
   const { xs, ys } = axes(o);
   let [x, y] = [p[0] * w, p[1] * h];
   const guides: Guides = {};
@@ -95,8 +102,8 @@ export function snapPoint(p: Pt, o: SnapOptions): { point: Pt; guides: Guides } 
     const along = (x - fx) * ux + (y - fy) * uy;
     [x, y] = [fx + ux * along, fy + uy * along];
     // Slide along the locked line to the nearest guide it crosses.
-    const gx = ux !== 0 ? pullTo(x, xs, tol, edge) : undefined;
-    const gy = uy !== 0 ? pullTo(y, ys, tol, edge) : undefined;
+    const gx = ux !== 0 ? pullTo(x, xs, tol, ex) : undefined;
+    const gy = uy !== 0 ? pullTo(y, ys, tol, ey) : undefined;
     const useX = gx && (!gy || Math.abs(gx.by) <= Math.abs(gy.by));
     if (useX) {
       x += gx.by;
@@ -108,8 +115,8 @@ export function snapPoint(p: Pt, o: SnapOptions): { point: Pt; guides: Guides } 
       guides.y = gy.at / h;
     }
   } else {
-    const gx = pullTo(x, xs, tol, edge);
-    const gy = pullTo(y, ys, tol, edge);
+    const gx = pullTo(x, xs, tol, ex);
+    const gy = pullTo(y, ys, tol, ey);
     if (gx) {
       x += gx.by;
       guides.x = gx.at / w;
@@ -133,7 +140,7 @@ export function snapMove(
   o: MoveOptions,
 ): { delta: Pt; guides: Guides } {
   const { w, h, tol } = o;
-  const edge = o.edge ?? 0;
+  const edge = perAxis(o.edge);
   let [dx, dy] = [delta[0] * w, delta[1] * h];
   if (o.shift) {
     if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
@@ -141,10 +148,10 @@ export function snapMove(
   }
   const { xs, ys } = axes(o);
   /** The smallest pull that puts one of `vs` on a line, if any is close. */
-  const pull = (vs: number[], lines: number[]) => {
+  const pull = (vs: number[], lines: number[], axis: 0 | 1) => {
     let best: Pull | undefined;
-    for (const v of vs) {
-      const p = pullTo(v, lines, tol, edge);
+    for (const [i, v] of vs.entries()) {
+      const p = pullTo(v, lines, tol, (o.edges?.[i] ?? edge)[axis]);
       if (p && (!best || Math.abs(p.by) < Math.abs(best.by))) best = p;
     }
     return best;
@@ -155,6 +162,7 @@ export function snapMove(
       ? pull(
           moved.map(([x]) => x * w + dx),
           xs,
+          0,
         )
       : undefined;
   const py =
@@ -162,6 +170,7 @@ export function snapMove(
       ? pull(
           moved.map(([, y]) => y * h + dy),
           ys,
+          1,
         )
       : undefined;
   const guides: Guides = {};
