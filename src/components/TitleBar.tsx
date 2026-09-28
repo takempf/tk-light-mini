@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { Button, Logo, Switch } from "../ui";
+import { SettingsPopover } from "./SettingsPopover";
 
 /** Windows caption glyphs, drawn on the same 16-unit grid as tk icons. */
 const GLYPHS = {
@@ -73,6 +74,7 @@ export function TitleBar() {
         <span>light mini</span>
       </div>
       <div className="titlebar-actions">
+        <SettingsPopover />
         <Button
           variant="ghost"
           size="sm"

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { Lights } from "./components/Lights";
-import { Screen } from "./components/Screen";
+import { Canvas } from "./components/Canvas";
+import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useStore } from "./store";
 import { startSync } from "./sync";
@@ -27,9 +27,9 @@ export default function App() {
         {enabled && lightCount === 0 && (
           <p className="banner hint">Add a light to start painting your wall.</p>
         )}
-        <main className="grid">
-          <Screen />
-          <Lights />
+        <main className="layout">
+          <Canvas />
+          <Sidebar />
         </main>
       </div>
     </div>

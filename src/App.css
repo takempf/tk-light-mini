@@ -105,22 +105,17 @@ body {
 /* Page ------------------------------------------------------------------ */
 
 .content {
-  overflow: auto;
-  padding: var(--tk-space-5) var(--tk-space-5) var(--tk-space-8);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.grid {
+/* The screen fills the window; the sidebar scrolls on its own. */
+.layout {
   display: grid;
-  align-items: start;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--tk-space-4);
-  max-width: 1100px;
-  margin: 0 auto;
-}
-@media (max-width: 760px) {
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  min-height: 0;
 }
 .stack {
   display: flex;
@@ -137,8 +132,7 @@ body {
 }
 
 .banner {
-  max-width: 1100px;
-  margin: 0 auto var(--tk-space-4);
+  margin: var(--tk-space-4) var(--tk-space-5) 0;
   padding: var(--tk-space-3) var(--tk-space-4);
   border: var(--tk-border-width) solid var(--tk-border-subtle);
   border-radius: var(--tk-radius);
@@ -154,11 +148,8 @@ body {
 .error {
   color: var(--tk-danger);
 }
-.empty,
-.hint {
-  color: var(--tk-fg-muted);
-}
 .empty {
+  color: var(--tk-fg-muted);
   font-size: var(--tk-text-sm);
 }
 .meta {
@@ -167,74 +158,182 @@ body {
   font-size: var(--tk-text-xs);
 }
 
-ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tk-space-2);
 }
 
-/* Preview: the screen split into the zones it's sampled as. ------------ */
+/* Canvas: the screen, with every light placed on it. -------------------- */
 
-.preview {
+.canvas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tk-space-3);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--tk-space-5);
+}
+/* Fits the screen's shape inside whatever space is left. */
+.canvas-fit {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-height: 0;
+  container-type: size;
+}
+.canvas-box {
   position: relative;
-}
-.wall {
-  display: block;
-  width: 100%;
-  aspect-ratio: 16 / 9;
+  width: min(100cqw, 100cqh * var(--aspect, 1.7778));
   overflow: hidden;
-  border: var(--tk-border-width) solid var(--tk-border-subtle);
   border-radius: var(--tk-radius-lg);
-  background: var(--tk-surface);
+  background: #000;
+  /* A ring, not a border, so the overlay lines up with the picture. */
+  box-shadow: 0 0 0 var(--tk-border-width) var(--tk-border-subtle);
 }
-/* A hairline in the zone's own color hides anti-aliasing seams between zones. */
-.zone {
-  fill: var(--tk-surface);
-  stroke: var(--tk-surface);
-  stroke-width: 1px;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-.preview-status {
+.canvas-box > canvas,
+.canvas-box > svg,
+.canvas-waiting {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.canvas-box > canvas {
+  image-rendering: pixelated;
+  opacity: 0.75;
+}
+.canvas-box > svg {
+  overflow: visible;
+  touch-action: none;
+}
+.canvas-box[data-drawing] > svg {
+  cursor: crosshair;
+}
+.canvas-waiting {
   display: grid;
   place-items: center;
   color: var(--tk-fg-subtle);
-  font-family: var(--tk-label-font);
   font-size: var(--tk-text-xs);
-  font-weight: var(--tk-label-weight);
-  font-stretch: var(--tk-label-stretch);
-  letter-spacing: var(--tk-label-tracking);
-  text-transform: var(--tk-label-transform);
+}
+.canvas-hint {
+  min-height: 1lh;
+  text-align: center;
+}
+
+/* Hit-testing is done in code, so shapes let clicks through. */
+.shape {
+  opacity: 0.6;
   pointer-events: none;
 }
+.shape[data-selected] {
+  opacity: 1;
+}
+.shape[data-off] {
+  opacity: 0.25;
+}
+.shape-rim {
+  fill: none;
+  stroke: rgb(255 255 255 / 0.35);
+  stroke-linejoin: round;
+}
+.shape[data-selected] .shape-rim {
+  stroke: rgb(255 255 255 / 0.85);
+}
+.shape-piece {
+  fill: none;
+  stroke: #333;
+  stroke-linejoin: round;
+  stroke-linecap: butt;
+}
+.shape-tag,
+.editor-label {
+  fill: #fff;
+  stroke: rgb(0 0 0 / 0.75);
+  stroke-width: 3px;
+  paint-order: stroke;
+  font-family: var(--tk-label-font);
+  font-size: 11px;
+  user-select: none;
+}
+.shape-tag {
+  font-weight: var(--tk-label-weight);
+  letter-spacing: var(--tk-label-tracking);
+}
+.guide {
+  stroke: var(--tk-accent);
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.editor-line,
+.editor-ghost {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.editor-ghost {
+  opacity: 0.7;
+}
+.editor-tick {
+  fill: #fff;
+  pointer-events: none;
+}
+.editor-label {
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.editor-handle {
+  fill: #fff;
+  stroke: #000;
+  stroke-width: 1.5px;
+  cursor: grab;
+}
+.editor-handle[data-start] {
+  fill: var(--tk-accent);
+}
+.editor-handle:focus-visible {
+  outline: none;
+  stroke: var(--tk-accent);
+  stroke-width: 3px;
+}
 
-/* Lights --------------------------------------------------------------- */
+/* Sidebar --------------------------------------------------------------- */
+
+.sidebar {
+  overflow: auto;
+  padding: var(--tk-space-5);
+  border-left: var(--tk-border-width) solid var(--tk-border-subtle);
+  background: var(--tk-surface);
+}
 
 .lights {
-  border-top: 0;
+  display: flex;
+  flex-direction: column;
 }
-.lights .light:last-child {
-  border-bottom: 0;
+.light {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-3);
+  padding-block: var(--tk-space-2);
 }
-.light-trigger,
-.light.found {
-  padding-block: var(--tk-space-3);
-}
-.lights .light:first-child .light-trigger,
-.lights .light.found:first-child {
-  padding-top: 0;
-}
-.lights .light.found:last-child {
-  padding-bottom: 0;
-}
-.light-trigger > span:first-child {
+.light-open {
   display: flex;
   flex: 1;
   align-items: center;
   gap: var(--tk-space-3);
   min-width: 0;
+  padding: var(--tk-space-1) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .dot {
   flex: none;
@@ -255,10 +354,15 @@ ul {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.light.found {
-  display: flex;
-  align-items: center;
-  gap: var(--tk-space-3);
+.light-open:hover .light-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.light[data-off] .light-title {
+  opacity: 0.5;
+}
+.found-head {
+  margin-top: var(--tk-space-4);
 }
 .light.found .dot {
   background: transparent;
@@ -267,26 +371,49 @@ ul {
 .light.found .light-name {
   color: var(--tk-fg-muted);
 }
-.light-head {
+
+/* Inspector ------------------------------------------------------------- */
+
+.inspector {
+  gap: var(--tk-space-4);
+}
+.inspector-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  margin-block: calc(-1 * var(--tk-space-2));
+  margin-left: calc(-1 * var(--tk-space-2));
+}
+.inspector-actions {
+  padding-top: var(--tk-space-4);
+  border-top: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+.placement {
   gap: var(--tk-space-3);
 }
-.light-head > .tk-accordion-header {
-  flex: 1;
-  min-width: 0;
+.section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tk-space-1);
 }
-.light[data-off] .light-title {
-  opacity: 0.5;
-}
-.light-summary {
-  flex: none;
-  font-variant-numeric: tabular-nums;
-}
-.light-body {
-  gap: var(--tk-space-3);
-  padding-left: calc(0.8rem + var(--tk-space-3));
+.section-tab {
+  display: flex;
+  align-items: baseline;
+  gap: var(--tk-space-2);
+  padding: 4px 8px;
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius-sm);
+  background: transparent;
   color: var(--tk-fg);
+  font: inherit;
+  font-size: var(--tk-text-sm);
+  cursor: pointer;
+}
+.section-tab:hover {
+  border-color: var(--tk-border);
+}
+.section-tab[aria-pressed="true"] {
+  border-color: var(--tk-fg);
 }
 
 /* Segments and colors -------------------------------------------------- */
@@ -328,20 +455,7 @@ ul {
   display: flex;
   flex: none;
 }
-.picker-block {
-  gap: var(--tk-space-2);
-}
 .picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tk-space-2);
-}
-.palette {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tk-space-1);
-}
-.swatches {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
   gap: var(--tk-space-1);
@@ -364,7 +478,8 @@ ul {
 .swatch-button:hover {
   border-color: var(--tk-border);
 }
-.swatch-button[aria-pressed="true"] {
+.swatch-button[aria-pressed="true"],
+.swatch-button[data-pressed] {
   border-color: var(--tk-fg);
 }
 .chip {
@@ -378,107 +493,46 @@ ul {
 .chip[data-live] {
   border-radius: 3px;
 }
-
-/* Path editor ----------------------------------------------------------- */
-
-.path-block {
-  gap: var(--tk-space-2);
+.chip-input {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
 }
-.path-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tk-space-2);
+.chip-input::-webkit-color-swatch-wrapper {
+  padding: 0;
 }
-.path-editor {
+.chip-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+/* Settings -------------------------------------------------------------- */
+
+.settings {
+  width: 18rem;
   gap: var(--tk-space-3);
 }
-.path-canvas {
-  position: relative;
-  width: 100%;
-  overflow: hidden;
-  border: var(--tk-border-width) solid var(--tk-border-subtle);
-  border-radius: var(--tk-radius-lg);
-  background: #000;
-}
-.path-canvas > canvas,
-.path-canvas > svg,
-.path-waiting {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.path-canvas > canvas {
-  image-rendering: pixelated;
-  opacity: 0.8;
-}
-.path-canvas > svg {
-  cursor: crosshair;
-  touch-action: none;
-}
-.path-waiting {
-  display: grid;
-  place-items: center;
-  color: var(--tk-fg-subtle);
-  font-size: var(--tk-text-xs);
-}
-.path-band {
-  fill: none;
-  stroke: rgb(255 255 255 / 0.6);
-  stroke-linejoin: round;
-  stroke-linecap: butt;
-  pointer-events: none;
-}
-.path-piece {
-  fill: none;
-  stroke: #333;
-  stroke-linejoin: round;
-  stroke-linecap: butt;
-  pointer-events: none;
-}
-.path-tick {
-  fill: #fff;
-  pointer-events: none;
-}
-.path-line {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 1px;
-  stroke-dasharray: 4 3;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-}
-.path-label {
-  fill: #fff;
-  stroke: rgb(0 0 0 / 0.7);
-  stroke-width: 2px;
-  paint-order: stroke;
-  vector-effect: non-scaling-stroke;
-  text-anchor: middle;
-  dominant-baseline: central;
-  font-family: var(--tk-label-font);
-  pointer-events: none;
-  user-select: none;
-}
-.path-handle {
-  fill: #fff;
-  stroke: #000;
-  stroke-width: 1.5px;
-  vector-effect: non-scaling-stroke;
-  cursor: grab;
-}
-.path-handle[data-start] {
-  fill: var(--tk-accent);
-}
-.path-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--tk-space-2);
-}
 
-.light-actions {
-  display: flex;
-  gap: var(--tk-space-2);
+/* Narrow windows: the screen on top, settings below. -------------------- */
+
+@media (max-width: 700px) {
+  .content {
+    overflow: auto;
+  }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .canvas-fit {
+    display: block;
+    container-type: normal;
+  }
+  .canvas-box {
+    width: 100%;
+  }
+  .sidebar {
+    overflow: visible;
+    border-top: var(--tk-border-width) solid var(--tk-border-subtle);
+    border-left: 0;
+  }
 }

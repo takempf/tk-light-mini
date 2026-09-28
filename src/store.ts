@@ -2,26 +2,39 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { api } from "./lib/api";
 import {
-  type AddedDevice,
-  defaultSegments,
-  type EngineConfig,
-  type EngineStatus,
-  type GoveeDevice,
-  type LightPath,
-  type MonitorInfo,
-  type Rgb,
-  type ScreenImage,
-  type Settings,
-  type Source,
-  type Tuning,
-  type ZoneColors,
+  mergeSections,
+  sectionStarts,
+  sectionsOf,
+  segmentSources,
+  splitSection,
+} from "./lib/lights";
+import { edgeLoop, type OldZone, zonePath } from "./lib/path";
+import type {
+  AddedDevice,
+  EngineConfig,
+  EngineStatus,
+  GoveeDevice,
+  LightPath,
+  MonitorInfo,
+  Rgb,
+  ScreenImage,
+  Section,
+  Settings,
+  Source,
+  Tuning,
 } from "./lib/types";
 
 export const DEFAULT_SETTINGS: Settings = {
   fps: 30,
   monitor: 0,
-  tuning: { saturation: 1.3, brightness: 1, depth: 0.15, smoothing: 0.5 },
+  tuning: { saturation: 1.3, brightness: 1, smoothing: 0.5 },
 };
+
+/** The section being edited. */
+export interface Selection {
+  id: string;
+  section: number;
+}
 
 interface AppState {
   // Persisted
@@ -34,24 +47,34 @@ interface AppState {
   scanError: string | null;
   monitors: MonitorInfo[];
   status: EngineStatus;
+  selection: Selection | null;
+  /** Clicks on the screen add points to the selected section. */
+  drawing: boolean;
 
   scan: () => Promise<void>;
   loadMonitors: () => Promise<void>;
+  /** Add a light around the screen's edge, and select it. */
   addDevice: (d: GoveeDevice) => void;
   removeDevice: (id: string) => void;
-  /** Color the whole light, or just `segments` (razer mode) if given. */
-  setColor: (id: string, color: Source, segments?: readonly number[]) => void;
   renameDevice: (id: string, name: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
   /** Switch one light on or off, right away and for sync. */
   setPower: (id: string, on: boolean) => void;
   setRazer: (id: string, on: boolean) => void;
   setSegments: (id: string, segments: number) => void;
-  /**
-   * Set or clear a light's path. A new path becomes the light's color; clearing
-   * it drops "path" colors.
-   */
-  setPath: (id: string, path: LightPath | undefined) => void;
+  /** Color a whole section. Clears its segment overrides. */
+  setSectionColor: (id: string, section: number, color: Source) => void;
+  /** Override single segments, or clear them with null. */
+  setSegmentColors: (id: string, segments: readonly number[], color: Source | null) => void;
+  /** Place a section, or clear its path with undefined. */
+  setSectionPath: (id: string, section: number, path: LightPath | undefined) => void;
+  /** Split a section after `at` of its segments (default: half), and select the new part. */
+  splitSection: (id: string, section: number, at?: number) => void;
+  /** Join a section with the next. */
+  mergeSections: (id: string, section: number) => void;
+  select: (s: Selection | null) => void;
+  /** Start or stop drawing. Stopping drops a path left with under two points. */
+  setDrawing: (on: boolean) => void;
   setEnabled: (on: boolean) => void;
   /** Stop syncing and switch every light off. */
   lightsOff: () => Promise<void>;
@@ -63,160 +86,244 @@ interface AppState {
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** The screen's shape, from the latest frame. */
+const aspect = () => {
+  const img = useScreen.getState().image;
+  return img ? img.width / img.height : 16 / 9;
+};
+
 export const useStore = create<AppState>()(
   persist(
-    (set, get) => ({
-      devices: [],
-      enabled: false,
-      settings: DEFAULT_SETTINGS,
-      discovered: [],
-      scanning: false,
-      scanError: null,
-      monitors: [],
-      status: { running: false, error: null },
+    (set, get) => {
+      const edit = (id: string, f: (d: AddedDevice) => AddedDevice) =>
+        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? f(d) : d)) }));
+      /** Edit a light's fitted sections. */
+      const editSections = (id: string, f: (sections: Section[], d: AddedDevice) => Section[]) =>
+        edit(id, (d) => ({ ...d, sections: f(sectionsOf(d), d) }));
+      /** Stop drawing. A path left with under two points is dropped. */
+      const endDrawing = () => {
+        const { drawing, selection } = get();
+        if (!drawing || !selection) return;
+        editSections(selection.id, (sections) =>
+          sections.map((s, k) =>
+            k === selection.section && s.path && s.path.points.length < 2
+              ? { ...s, path: undefined }
+              : s,
+          ),
+        );
+        set({ drawing: false });
+      };
 
-      scan: async () => {
-        if (get().scanning) return;
-        set({ scanning: true, scanError: null });
-        try {
-          const found = await api.discoverDevices();
-          // DHCP may have moved a known device: follow it by id.
-          const byId = new Map(found.map((d) => [d.id, d]));
+      return {
+        devices: [],
+        enabled: false,
+        settings: DEFAULT_SETTINGS,
+        discovered: [],
+        scanning: false,
+        scanError: null,
+        monitors: [],
+        status: { running: false, error: null },
+        selection: null,
+        drawing: false,
+
+        scan: async () => {
+          if (get().scanning) return;
+          set({ scanning: true, scanError: null });
+          try {
+            const found = await api.discoverDevices();
+            // DHCP may have moved a known device: follow it by id.
+            const byId = new Map(found.map((d) => [d.id, d]));
+            set((s) => ({
+              discovered: found,
+              devices: s.devices.map((d) => {
+                const f = byId.get(d.id);
+                return f && f.ip !== d.ip ? { ...d, ip: f.ip } : d;
+              }),
+            }));
+          } catch (e) {
+            set({ scanError: errorText(e) });
+          } finally {
+            set({ scanning: false });
+          }
+        },
+
+        loadMonitors: async () => {
+          try {
+            set({ monitors: await api.listMonitors() });
+          } catch {
+            set({ monitors: [] });
+          }
+        },
+
+        addDevice: (d) =>
+          set((s) =>
+            s.devices.some((x) => x.id === d.id)
+              ? s
+              : {
+                  devices: [
+                    ...s.devices,
+                    {
+                      ...d,
+                      name: d.sku || d.id,
+                      on: true,
+                      brightness: 1,
+                      razer: false,
+                      sections: [{ count: 1, color: "path", path: edgeLoop(aspect(), 0.12) }],
+                    },
+                  ],
+                  selection: { id: d.id, section: 0 },
+                  drawing: false,
+                },
+          ),
+        removeDevice: (id) =>
           set((s) => ({
-            discovered: found,
-            devices: s.devices.map((d) => {
-              const f = byId.get(d.id);
-              return f && f.ip !== d.ip ? { ...d, ip: f.ip } : d;
-            }),
-          }));
-        } catch (e) {
-          set({ scanError: errorText(e) });
-        } finally {
-          set({ scanning: false });
-        }
-      },
-
-      loadMonitors: async () => {
-        try {
-          set({ monitors: await api.listMonitors() });
-        } catch {
-          set({ monitors: [] });
-        }
-      },
-
-      addDevice: (d) =>
-        set((s) =>
-          s.devices.some((x) => x.id === d.id)
-            ? s
-            : {
-                devices: [
-                  ...s.devices,
-                  {
-                    ...d,
-                    name: d.sku || d.id,
-                    on: true,
-                    color: "all",
-                    brightness: 1,
-                    razer: false,
-                  },
-                ],
-              },
-        ),
-      removeDevice: (id) => set((s) => ({ devices: s.devices.filter((d) => d.id !== id) })),
-      setColor: (id, color, segments = []) =>
-        set((s) => ({
-          devices: s.devices.map((d) => {
-            if (d.id !== id) return d;
-            if (segments.length === 0) return { ...d, color, segmentColors: undefined };
+            devices: s.devices.filter((d) => d.id !== id),
+            selection: s.selection?.id === id ? null : s.selection,
+            drawing: s.selection?.id === id ? false : s.drawing,
+          })),
+        renameDevice: (id, name) => edit(id, (d) => ({ ...d, name })),
+        setDeviceBrightness: (id, brightness) => edit(id, (d) => ({ ...d, brightness })),
+        setPower: (id, on) => {
+          edit(id, (d) => ({ ...d, on }));
+          const d = get().devices.find((x) => x.id === id);
+          if (d) api.setPower(d.ip, on).catch((e) => console.error("set_power", e));
+        },
+        setRazer: (id, razer) => {
+          edit(id, (d) => ({ ...d, razer }));
+          // Without razer mode a light is one section: keep the selection on it.
+          const sel = get().selection;
+          if (!razer && sel?.id === id) set({ selection: { id, section: 0 } });
+        },
+        setSegments: (id, segments) => {
+          edit(id, (d) => ({ ...d, segments }));
+          const sel = get().selection;
+          const d = get().devices.find((x) => x.id === id);
+          if (d && sel?.id === id && sel.section >= sectionsOf(d).length) {
+            set({ selection: { id, section: sectionsOf(d).length - 1 } });
+          }
+        },
+        setSectionColor: (id, section, color) =>
+          edit(id, (d) => {
+            const sections = sectionsOf(d);
+            const target = sections[section];
+            if (!target) return d;
+            const start = sectionStarts(sections)[section] as number;
+            const segmentColors = d.segmentColors?.map((c, i) =>
+              i >= start && i < start + target.count ? null : c,
+            );
+            return {
+              ...d,
+              sections: sections.map((s, k) => (k === section ? { ...s, color } : s)),
+              segmentColors,
+            };
+          }),
+        setSegmentColors: (id, segments, color) =>
+          edit(id, (d) => {
             const segmentColors = [...(d.segmentColors ?? [])];
             for (const i of segments) segmentColors[i] = color;
             return { ...d, segmentColors: Array.from(segmentColors, (c) => c ?? null) };
           }),
-        })),
-      renameDevice: (id, name) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, name } : d)) })),
-      setDeviceBrightness: (id, brightness) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, brightness } : d)) })),
-      setPower: (id, on) => {
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, on } : d)) }));
-        const d = get().devices.find((x) => x.id === id);
-        if (d) api.setPower(d.ip, on).catch((e) => console.error("set_power", e));
-      },
-      setRazer: (id, razer) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, razer } : d)) })),
-      setPath: (id, path) =>
-        set((s) => ({
-          devices: s.devices.map((d) => {
-            if (d.id !== id) return d;
-            if (path) return { ...d, path, color: d.path ? d.color : "path" };
-            return {
-              ...d,
-              path: undefined,
-              color: d.color === "path" ? "all" : d.color,
-              segmentColors: d.segmentColors?.map((c) => (c === "path" ? null : c)),
-            };
-          }),
-        })),
-      setSegments: (id, segments) =>
-        set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, segments } : d)) })),
-      setEnabled: (enabled) => set({ enabled }),
-      lightsOff: async () => {
-        set({ enabled: false });
-        await api.lightsOff(get().devices.map((d) => d.ip));
-      },
-      setFps: (fps) => set((s) => ({ settings: { ...s.settings, fps } })),
-      setMonitor: (monitor) => set((s) => ({ settings: { ...s.settings, monitor } })),
-      setTuning: (t) =>
-        set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
-      resetTuning: () =>
-        set((s) => ({ settings: { ...s.settings, tuning: DEFAULT_SETTINGS.tuning } })),
-    }),
+        setSectionPath: (id, section, path) =>
+          editSections(id, (sections) =>
+            sections.map((s, k) => (k === section ? { ...s, path } : s)),
+          ),
+        splitSection: (id, section, at) => {
+          editSections(id, (sections) => splitSection(sections, section, at));
+          const d = get().devices.find((x) => x.id === id);
+          if (d && sectionsOf(d).length > section + 1) {
+            set({ selection: { id, section: section + 1 }, drawing: false });
+          }
+        },
+        mergeSections: (id, section) => {
+          editSections(id, (sections) => mergeSections(sections, section));
+          const sel = get().selection;
+          if (sel?.id === id && sel.section > section) {
+            set({ selection: { id, section: sel.section - 1 }, drawing: false });
+          }
+        },
+        select: (selection) => {
+          endDrawing();
+          set({ selection, drawing: false });
+        },
+        setDrawing: (drawing) => (drawing ? set({ drawing }) : endDrawing()),
+        setEnabled: (enabled) => set({ enabled }),
+        lightsOff: async () => {
+          set({ enabled: false });
+          await api.lightsOff(get().devices.map((d) => d.ip));
+        },
+        setFps: (fps) => set((s) => ({ settings: { ...s.settings, fps } })),
+        setMonitor: (monitor) => set((s) => ({ settings: { ...s.settings, monitor } })),
+        setTuning: (t) =>
+          set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
+        resetTuning: () =>
+          set((s) => ({ settings: { ...s.settings, tuning: DEFAULT_SETTINGS.tuning } })),
+      };
+    },
     {
       name: "tk-light-mini",
-      version: 6,
-      migrate: (old, version) => {
-        const s = old as { devices?: AddedDevice[] };
-        if (version < 2 && s.devices) {
-          s.devices = s.devices.map((d) => ({ ...d, brightness: d.brightness ?? 1 }));
-        }
-        if (version < 4 && s.devices) {
-          s.devices = s.devices.map((d) => ({ ...d, on: d.on ?? true }));
-        }
-        if (version < 5 && s.devices) {
-          // v3-4 had an experimental `whiteLeds` flag, replaced by razer mode.
-          s.devices = s.devices.map(
-            ({ whiteLeds: _, ...d }: AddedDevice & { whiteLeds?: boolean }) => ({
-              ...d,
-              razer: d.razer ?? false,
-            }),
-          );
-        }
-        if (version < 6 && s.devices) {
-          // `zone` became `color`, which can also be a fixed color.
-          s.devices = s.devices.map(({ zone, ...d }: AddedDevice & { zone?: Source }) => ({
-            ...d,
-            color: d.color ?? zone ?? "all",
-          }));
-        }
-        return s as AppState;
-      },
+      version: 7,
+      migrate: (old, version) => migrate(old, version),
       partialize: (s) => ({ devices: s.devices, enabled: s.enabled, settings: s.settings }),
     },
   ),
 );
 
-export const segmentCount = (d: AddedDevice) => d.segments ?? defaultSegments(d.sku);
+/** A saved device before v7: one color, maybe a zone, and one path. */
+type V6Device = Omit<AddedDevice, "sections" | "segmentColors"> & {
+  color?: string;
+  zone?: string;
+  path?: LightPath;
+  whiteLeds?: boolean;
+  segmentColors?: (string | null)[];
+};
 
-/** Each segment's color, in razer mode. */
-export const segmentSources = (d: AddedDevice): Source[] =>
-  Array.from({ length: segmentCount(d) }, (_, i) => d.segmentColors?.[i] ?? d.color);
+const OLD_ZONES = new Set(["top", "left", "bottom", "right", "all", "center"]);
+const isHex = (c: unknown): c is `#${string}` => typeof c === "string" && c.startsWith("#");
 
-/** Live zone colors, split out so 10 Hz updates only re-render the preview. */
-export const useZoneColors = create<{
-  colors: ZoneColors | null;
-  /** Live path colors by light IP, one per path segment. */
-  paths: Record<string, Rgb[]>;
-}>(() => ({ colors: null, paths: {} }));
+/** Bring saved state from `version` up to date. */
+export function migrate(old: unknown, version: number): AppState {
+  const s = old as {
+    devices?: V6Device[];
+    settings?: Settings & { tuning: Tuning & { depth?: number } };
+  };
+  if (version < 7 && s.devices) {
+    const depth = s.settings?.tuning.depth ?? 0.15;
+    const width = Math.min(Math.max(depth, 0.02), 0.4);
+    s.devices = s.devices.map(({ whiteLeds: _, zone, color: c, path, segmentColors, ...d }) => {
+      // v5 and older: `zone`, before it became `color`.
+      const color = c ?? zone ?? "all";
+      let sectionPath = path;
+      if (!sectionPath && OLD_ZONES.has(color)) {
+        sectionPath = zonePath(color as OldZone, 16 / 9, width);
+      }
+      const section: Section = {
+        count: 1,
+        color: isHex(color) ? color : "path",
+        path: sectionPath,
+      };
+      return {
+        ...d,
+        brightness: d.brightness ?? 1,
+        on: d.on ?? true,
+        razer: d.razer ?? false,
+        sections: [section],
+        // Old zone overrides follow the path now.
+        segmentColors: segmentColors?.map((x) => (isHex(x) || x === "path" ? x : null)),
+      } satisfies AddedDevice;
+    }) as unknown as V6Device[];
+  }
+  if (version < 7 && s.settings?.tuning) {
+    const { depth: _, ...tuning } = s.settings.tuning;
+    s.settings = { ...s.settings, tuning };
+  }
+  return s as unknown as AppState;
+}
+
+/**
+ * Live path colors by light IP, one per segment. Split out so 10 Hz updates
+ * only re-render what shows them.
+ */
+export const useLive = create<{ paths: Record<string, Rgb[]> }>(() => ({ paths: {} }));
 
 /**
  * The engine's small screen frame: the one capture, shared by every component.
@@ -234,13 +341,21 @@ export function toEngineConfig(
     tuning: s.settings.tuning,
     devices: s.devices
       .filter((d) => d.on)
-      .map((d) => ({
-        ip: d.ip,
-        color: d.color,
-        brightness: d.brightness,
-        razer: d.razer,
-        segments: d.razer ? segmentSources(d) : [],
-        path: d.path ?? null,
-      })),
+      .map((d) => {
+        const segments = segmentSources(d);
+        const sections = sectionsOf(d);
+        const starts = sectionStarts(sections);
+        return {
+          ip: d.ip,
+          brightness: d.brightness,
+          razer: d.razer,
+          segments,
+          sections: sections.map((sec, k) => {
+            const start = starts[k] as number;
+            const used = segments.slice(start, start + sec.count).includes("path");
+            return { path: used ? (sec.path ?? null) : null, count: sec.count };
+          }),
+        };
+      }),
   };
 }

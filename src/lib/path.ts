@@ -65,18 +65,94 @@ export function reversePath(p: LightPath): LightPath {
   return { ...p, points };
 }
 
+/** A short line across the middle: where a light starts when placed by hand. */
+export const linePath = (width = 0.12): LightPath => ({
+  points: [
+    [0.3, 0.5],
+    [0.7, 0.5],
+  ],
+  width,
+  closed: false,
+});
+
+/** The old screen zones, as paths. For moving saved lights over. */
+export type OldZone = "top" | "left" | "bottom" | "right" | "all" | "center";
+
 /**
- * Where a click at `p` (screen fractions) falls on the path: the index to insert
- * a new point at, or -1 when it's off the band. On a `w`x`h` screen.
+ * A path that samples about what an old zone did: a band `width` thick along
+ * an edge, or a wide one over the middle.
  */
-export function insertIndex(path: LightPath, p: Pt, w: number, h: number): number {
+export function zonePath(zone: OldZone, aspect: number, width: number): LightPath {
+  const iy = width / 2;
+  const ix = iy / aspect;
+  const line = (points: [number, number][], w = width): LightPath => ({
+    points,
+    width: w,
+    closed: false,
+  });
+  switch (zone) {
+    case "top":
+      return line([
+        [0, iy],
+        [1, iy],
+      ]);
+    case "bottom":
+      return line([
+        [0, 1 - iy],
+        [1, 1 - iy],
+      ]);
+    case "left":
+      return line([
+        [ix, 0],
+        [ix, 1],
+      ]);
+    case "right":
+      return line([
+        [1 - ix, 0],
+        [1 - ix, 1],
+      ]);
+    case "center":
+      return line(
+        [
+          [0.35, 0.5],
+          [0.65, 0.5],
+        ],
+        0.5,
+      );
+    case "all":
+      return line(
+        [
+          [0.25, 0.5],
+          [0.75, 0.5],
+        ],
+        1,
+      );
+  }
+}
+
+/** The path moved by `[dx, dy]`, held so every point stays on screen. */
+export function movePath(p: LightPath, [dx, dy]: Pt): LightPath {
+  if (p.points.length === 0) return p;
+  const xs = p.points.map(([x]) => x);
+  const ys = p.points.map(([, y]) => y);
+  const mx = Math.min(Math.max(dx, -Math.min(...xs)), 1 - Math.max(...xs));
+  const my = Math.min(Math.max(dy, -Math.min(...ys)), 1 - Math.max(...ys));
+  return { ...p, points: p.points.map(([x, y]) => [x + mx, y + my]) };
+}
+
+/**
+ * The leg of the path nearest `p` (screen fractions), on a `w`x`h` screen: the
+ * index a point inserted there would get, and how far away it is in pixels.
+ */
+function nearestLeg(path: LightPath, p: Pt, w: number, h: number): { index: number; d: number } {
   const pts = path.points.map(([x, y]) => [x * w, y * h] as Pt);
   const n = pts.length;
-  if (n < 2) return -1;
   const [cx, cy] = [p[0] * w, p[1] * h];
-  const reach = Math.max((path.width * h) / 2, 1);
-  let best = -1;
-  let bestD = reach;
+  if (n === 1) {
+    const [x, y] = pts[0] as Pt;
+    return { index: 1, d: Math.hypot(cx - x, cy - y) };
+  }
+  let best = { index: -1, d: Number.POSITIVE_INFINITY };
   const edges = path.closed && n > 2 ? n : n - 1;
   for (let k = 0; k < edges; k++) {
     const [a, b] = [pts[k] as Pt, pts[(k + 1) % n] as Pt];
@@ -84,10 +160,22 @@ export function insertIndex(path: LightPath, p: Pt, w: number, h: number): numbe
     const len2 = dx * dx + dy * dy;
     const u = len2 > 0 ? Math.min(1, Math.max(0, ((cx - a[0]) * dx + (cy - a[1]) * dy) / len2)) : 0;
     const d = Math.hypot(cx - (a[0] + dx * u), cy - (a[1] + dy * u));
-    if (d <= bestD) {
-      bestD = d;
-      best = k + 1;
-    }
+    if (d <= best.d) best = { index: k + 1, d };
   }
   return best;
+}
+
+/** How far `p` is from the path's band, in pixels. 0 or less = on it. */
+export function distanceTo(path: LightPath, p: Pt, w: number, h: number): number {
+  if (path.points.length === 0) return Number.POSITIVE_INFINITY;
+  return nearestLeg(path, p, w, h).d - Math.max((path.width * h) / 2, 1);
+}
+
+/**
+ * Where a click at `p` (screen fractions) falls on the path: the index to insert
+ * a new point at, or -1 when it's off the band. On a `w`x`h` screen.
+ */
+export function insertIndex(path: LightPath, p: Pt, w: number, h: number): number {
+  if (path.points.length < 2) return -1;
+  return distanceTo(path, p, w, h) <= 0 ? nearestLeg(path, p, w, h).index : -1;
 }

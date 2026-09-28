@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
 import type { GoveeDevice } from "./lib/types";
-import { DEFAULT_SETTINGS, toEngineConfig, useStore } from "./store";
+import { DEFAULT_SETTINGS, migrate, toEngineConfig, useStore } from "./store";
 
 vi.mock("./lib/api", async () => (await import("./test/mockApi")).mockApiModule());
 
@@ -16,6 +16,8 @@ beforeEach(() => {
     discovered: [],
     scanning: false,
     scanError: null,
+    selection: null,
+    drawing: false,
   });
 });
 
@@ -31,51 +33,28 @@ describe("lights off", () => {
   });
 });
 
-describe("paths", () => {
-  const path = {
-    points: [
-      [0, 0.5],
-      [1, 0.5],
-    ] as [number, number][],
-    width: 0.1,
-    closed: false,
-  };
+const path = {
+  points: [
+    [0, 0.5],
+    [1, 0.5],
+  ] as [number, number][],
+  width: 0.1,
+  closed: false,
+};
 
-  it("a new path drives the light, and deleting it falls back to average", () => {
-    const s = useStore.getState();
-    s.addDevice(strip);
-    s.setRazer(strip.id, true);
-    s.setSegments(strip.id, 3);
-    s.setColor(strip.id, "path", [2]);
-    s.setPath(strip.id, path);
-    const dev = () => toEngineConfig(useStore.getState()).devices[0];
-    expect(dev()).toMatchObject({ color: "path", path, segments: ["path", "path", "path"] });
-    // Editing keeps a color picked since.
-    s.setColor(strip.id, "top");
-    s.setPath(strip.id, { ...path, width: 0.2 });
-    expect(dev()?.color).toBe("top");
-    s.setColor(strip.id, "path");
-    s.setColor(strip.id, "#ff0000", [0]);
-    s.setColor(strip.id, "path", [2]);
-    s.setPath(strip.id, undefined);
-    expect(dev()).toMatchObject({ color: "all", path: null, segments: ["#ff0000", "all", "all"] });
-  });
-});
+const engineDevice = () => toEngineConfig(useStore.getState()).devices[0];
 
 describe("devices", () => {
-  it("adds once, defaults to the average color", () => {
+  it("adds once, around the screen edge, and selects it", () => {
     const { addDevice } = useStore.getState();
     addDevice(lamp);
     addDevice(lamp);
-    const { devices } = useStore.getState();
+    const { devices, selection } = useStore.getState();
     expect(devices).toHaveLength(1);
-    expect(devices[0]).toMatchObject({
-      id: lamp.id,
-      color: "all",
-      name: "H6199",
-      brightness: 1,
-      on: true,
-    });
+    expect(devices[0]).toMatchObject({ id: lamp.id, name: "H6199", brightness: 1, on: true });
+    expect(devices[0]?.sections).toHaveLength(1);
+    expect(devices[0]?.sections[0]).toMatchObject({ color: "path", path: { closed: true } });
+    expect(selection).toEqual({ id: lamp.id, section: 0 });
   });
 
   it("switches a light off and back on", () => {
@@ -90,33 +69,91 @@ describe("devices", () => {
     expect(toEngineConfig(useStore.getState()).devices).toHaveLength(2);
   });
 
-  it("colors segments, and the whole light clears them", () => {
-    const s = useStore.getState();
-    s.addDevice(strip);
-    s.setRazer(strip.id, true);
-    s.setSegments(strip.id, 4);
-    s.setColor(strip.id, "#ff0000", [1, 3]);
-    const segments = () => toEngineConfig(useStore.getState()).devices[0]?.segments;
-    expect(segments()).toEqual(["all", "#ff0000", "all", "#ff0000"]);
-    s.setColor(strip.id, "top");
-    expect(segments()).toEqual(["top", "top", "top", "top"]);
-    s.setRazer(strip.id, false);
-    expect(segments()).toEqual([]);
-  });
-
-  it("sets color, renames and removes", () => {
+  it("renames, and removing clears the selection", () => {
     const s = useStore.getState();
     s.addDevice(lamp);
     s.addDevice(strip);
-    s.setColor(lamp.id, "left");
     s.renameDevice(strip.id, "Desk");
     s.setDeviceBrightness(strip.id, 0.4);
-    expect(useStore.getState().devices.map((d) => [d.color, d.name, d.brightness])).toEqual([
-      ["left", "H6199", 1],
-      ["all", "Desk", 0.4],
+    expect(useStore.getState().devices.map((d) => [d.name, d.brightness])).toEqual([
+      ["H6199", 1],
+      ["Desk", 0.4],
     ]);
-    s.removeDevice(lamp.id);
-    expect(useStore.getState().devices.map((d) => d.id)).toEqual([strip.id]);
+    s.removeDevice(strip.id);
+    expect(useStore.getState().devices.map((d) => d.id)).toEqual([lamp.id]);
+    expect(useStore.getState().selection).toBeNull();
+  });
+});
+
+describe("sections", () => {
+  const bars = () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setRazer(strip.id, true);
+    s.setSegments(strip.id, 12);
+    return useStore.getState();
+  };
+
+  it("splits a light in two and places each part", () => {
+    const s = bars();
+    s.splitSection(strip.id, 0);
+    expect(useStore.getState().selection).toEqual({ id: strip.id, section: 1 });
+    s.setSectionPath(strip.id, 1, path);
+    const d = engineDevice();
+    expect(d?.segments).toEqual(Array(12).fill("path"));
+    expect(d?.sections.map((x) => x.count)).toEqual([6, 6]);
+    expect(d?.sections[1]?.path).toEqual(path);
+    expect(d?.sections[0]?.path?.closed).toBe(true);
+  });
+
+  it("colors a section, and single segments", () => {
+    const s = bars();
+    s.splitSection(strip.id, 0, 4);
+    s.setSegmentColors(strip.id, [0, 5], "#00ff00");
+    s.setSectionColor(strip.id, 1, "#ff0000");
+    // The section's color clears overrides in it only.
+    expect(engineDevice()?.segments).toEqual([
+      "#00ff00",
+      "path",
+      "path",
+      "path",
+      ...Array(8).fill("#ff0000"),
+    ]);
+    // No segment follows the second section's path: the engine skips it.
+    s.setSectionPath(strip.id, 1, path);
+    expect(engineDevice()?.sections[1]?.path).toBeNull();
+    s.setSegmentColors(strip.id, [0], null);
+    expect(engineDevice()?.segments[0]).toBe("path");
+  });
+
+  it("merges, and keeps the selection on the merged part", () => {
+    const s = bars();
+    s.splitSection(strip.id, 0);
+    s.mergeSections(strip.id, 0);
+    expect(useStore.getState().devices[0]?.sections.map((x) => x.count)).toEqual([12]);
+    expect(useStore.getState().selection).toEqual({ id: strip.id, section: 0 });
+  });
+
+  it("drops a path with under two points when drawing ends", () => {
+    const s = bars();
+    s.setSectionPath(strip.id, 0, { ...path, points: [[0.5, 0.5]] });
+    s.setDrawing(true);
+    s.setDrawing(false);
+    expect(useStore.getState().devices[0]?.sections[0]?.path).toBeUndefined();
+    s.setSectionPath(strip.id, 0, path);
+    s.setDrawing(true);
+    s.select(null);
+    expect(useStore.getState().devices[0]?.sections[0]?.path).toEqual(path);
+  });
+
+  it("is one section of one segment without razer mode, but keeps the split", () => {
+    const s = bars();
+    s.splitSection(strip.id, 0);
+    s.setRazer(strip.id, false);
+    expect(engineDevice()).toMatchObject({ segments: ["path"], sections: [{ count: 1 }] });
+    expect(useStore.getState().selection).toEqual({ id: strip.id, section: 0 });
+    s.setRazer(strip.id, true);
+    expect(engineDevice()?.sections.map((x) => x.count)).toEqual([6, 6]);
   });
 });
 
@@ -159,8 +196,87 @@ describe("settings", () => {
       monitor: 0,
       tuning: DEFAULT_SETTINGS.tuning,
       devices: [
-        { ip: lamp.ip, color: "all", brightness: 1, razer: false, segments: [], path: null },
+        {
+          ip: lamp.ip,
+          brightness: 1,
+          razer: false,
+          segments: ["path"],
+          sections: [{ path: useStore.getState().devices[0]?.sections[0]?.path, count: 1 }],
+        },
       ],
     });
+  });
+});
+
+describe("migrate from v6", () => {
+  it("turns zones into paths and moves a path into the first section", () => {
+    const v6 = {
+      enabled: true,
+      settings: {
+        fps: 30,
+        monitor: 0,
+        tuning: { saturation: 1, brightness: 1, depth: 0.2, smoothing: 0.5 },
+      },
+      devices: [
+        {
+          id: "1",
+          ip: "a",
+          sku: "X",
+          name: "Top",
+          on: true,
+          brightness: 1,
+          razer: false,
+          color: "top",
+        },
+        {
+          id: "2",
+          ip: "b",
+          sku: "X",
+          name: "Red",
+          on: true,
+          brightness: 1,
+          razer: false,
+          color: "#ff0000",
+        },
+        {
+          id: "3",
+          ip: "c",
+          sku: "X",
+          name: "Strip",
+          on: true,
+          brightness: 1,
+          razer: true,
+          segments: 3,
+          color: "path",
+          path,
+          segmentColors: ["left", "#00ff00", null],
+        },
+        // Before v2: no brightness, a `zone`, and the old white LED flag.
+        { id: "4", ip: "d", sku: "X", name: "Old", zone: "all", whiteLeds: true },
+      ],
+    };
+    const s = migrate(v6, 6);
+    expect(s.settings.tuning).toEqual({ saturation: 1, brightness: 1, smoothing: 0.5 });
+    const [top, red, strip3, old] = s.devices;
+    expect(top?.sections).toEqual([
+      {
+        count: 1,
+        color: "path",
+        path: {
+          points: [
+            [0, 0.1],
+            [1, 0.1],
+          ],
+          width: 0.2,
+          closed: false,
+        },
+      },
+    ]);
+    expect(red?.sections).toEqual([{ count: 1, color: "#ff0000", path: undefined }]);
+    expect(strip3?.sections).toEqual([{ count: 1, color: "path", path }]);
+    expect(strip3?.segmentColors).toEqual([null, "#00ff00", null]);
+    expect(old).toMatchObject({ brightness: 1, on: true, razer: false });
+    expect(old).not.toHaveProperty("whiteLeds");
+    expect(old?.sections[0]?.path?.width).toBe(1);
   });
 });

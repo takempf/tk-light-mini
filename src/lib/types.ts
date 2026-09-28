@@ -1,18 +1,12 @@
-/** Screen zones. "all" is the whole screen, "center" is inside the edge bands. */
-export type Zone = "top" | "left" | "bottom" | "right" | "all" | "center";
-
-/** Same order as the Rust `Zone::index`. */
-export const ZONES: readonly Zone[] = ["top", "left", "bottom", "right", "all", "center"];
-
 export type Rgb = [number, number, number];
-/** Live colors in `ZONES` order. */
-export type ZoneColors = Rgb[];
+
+export type Hex = `#${string}`;
 
 /**
- * Where a light or segment gets its color: a live zone, the light's own path
- * ("path": segment i takes region i), or a fixed "#rrggbb".
+ * Where a segment gets its color: its section's path on screen ("path"), or a
+ * fixed "#rrggbb".
  */
-export type Source = Zone | "path" | `#${string}`;
+export type Source = "path" | Hex;
 
 /** A line drawn over the screen that a light samples along. */
 export interface LightPath {
@@ -22,6 +16,18 @@ export interface LightPath {
   width: number;
   /** Joins the last point back to the first. */
   closed: boolean;
+}
+
+/**
+ * A run of a light's segments, placed on its own. A light's sections cover its
+ * segments in order, so a light with two bars can put one on each side.
+ */
+export interface Section {
+  /** Segments in it. The last section takes whatever is left. */
+  count: number;
+  color: Source;
+  /** Where it samples. Unplaced until set. */
+  path?: LightPath;
 }
 
 /** The small frame the engine samples. */
@@ -42,18 +48,16 @@ export interface AddedDevice extends GoveeDevice {
   name: string;
   /** Off lights are switched off and skipped by sync. */
   on: boolean;
-  /** The whole light's color. */
-  color: Source;
   /** Per-light multiplier on top of the global tuning. 1 = unchanged. */
   brightness: number;
   /** Experimental: stream in razer mode, which skips the light's own fade. */
   razer: boolean;
-  /** Segments in razer mode. Unset = `defaultSegments(sku)`. */
+  /** Segments in razer mode. Unset = `defaultSegments(sku)`. Without razer mode, 1. */
   segments?: number;
-  /** Per-segment colors in razer mode. Missing or null = the light's color. */
+  /** At least one. Read them through `sectionsOf`, which fits them to the segments. */
+  sections: Section[];
+  /** Per-segment overrides. Missing or null = the section's color. */
   segmentColors?: (Source | null)[];
-  /** Where the "path" color samples. */
-  path?: LightPath;
 }
 
 /** Segment counts measured on real lights. */
@@ -65,7 +69,6 @@ export const defaultSegments = (sku: string) => KNOWN_SEGMENTS[sku] ?? 15;
 export interface Tuning {
   saturation: number;
   brightness: number;
-  depth: number;
   smoothing: number;
 }
 
@@ -92,13 +95,13 @@ export interface EngineConfig {
   fps: number;
   monitor: number;
   tuning: Tuning;
-  /** `segments` has one source per segment in razer mode, else is empty. */
   devices: {
     ip: string;
-    color: Source;
     brightness: number;
     razer: boolean;
+    /** One per segment. Without razer mode, one. */
     segments: Source[];
-    path: LightPath | null;
+    /** In order. `path` is null when unplaced or when no segment follows it. */
+    sections: { path: LightPath | null; count: number }[];
   }[];
 }

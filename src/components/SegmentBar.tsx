@@ -1,27 +1,30 @@
 import { useRef } from "react";
+import { css } from "../lib/colors";
+import { useSourceColor } from "../lib/live";
 import type { Source } from "../lib/types";
 import { Button } from "../ui";
-import { css, useSourceColor } from "./ZonePreview";
 
 function Cell({
   index,
+  offset,
   ip,
   source,
   selected,
   onClick,
 }: {
   index: number;
+  offset: number;
   ip: string;
   source: Source;
   selected: boolean;
   onClick: (e: React.MouseEvent) => void;
 }) {
-  const color = useSourceColor(source, ip, index);
+  const color = useSourceColor(source, ip, offset + index);
   return (
     <button
       type="button"
       className="segment"
-      aria-label={`Segment ${index + 1}`}
+      aria-label={`Segment ${offset + index + 1}`}
       aria-pressed={selected}
       style={{ background: css(color) }}
       onClick={onClick}
@@ -36,6 +39,7 @@ function Cell({
 export function SegmentBar({
   label,
   ip,
+  offset,
   sources,
   selected,
   onSelect,
@@ -43,6 +47,8 @@ export function SegmentBar({
   label: string;
   /** The light's IP, for live path colors. */
   ip: string;
+  /** The first cell's segment in the light. */
+  offset: number;
   sources: readonly Source[];
   selected: ReadonlySet<number>;
   onSelect: (s: Set<number>) => void;
@@ -69,6 +75,7 @@ export function SegmentBar({
             // biome-ignore lint/suspicious/noArrayIndexKey: segments are positions
             key={i}
             index={i}
+            offset={offset}
             ip={ip}
             source={s}
             selected={selected.has(i)}

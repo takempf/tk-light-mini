@@ -1,9 +1,8 @@
 import { vi } from "vitest";
-import type { EngineStatus, Rgb, ScreenImage, ZoneColors } from "../lib/types";
+import type { EngineStatus, Rgb, ScreenImage } from "../lib/types";
 
 /** Callbacks captured from the mocked event listeners. */
 export const listeners: {
-  zones?: (c: ZoneColors) => void;
   paths?: (p: { ip: string; colors: Rgb[] }[]) => void;
   screen?: (s: ScreenImage) => void;
   status?: (s: EngineStatus) => void;
@@ -20,10 +19,6 @@ export function mockApiModule() {
       identifyDevice: vi.fn(async () => {}),
       setPower: vi.fn(async () => {}),
       lightsOff: vi.fn(async () => {}),
-      onZones: vi.fn(async (cb: (c: ZoneColors) => void) => {
-        listeners.zones = cb;
-        return () => {};
-      }),
       onPaths: vi.fn(async (cb: (p: { ip: string; colors: Rgb[] }[]) => void) => {
         listeners.paths = cb;
         return () => {};

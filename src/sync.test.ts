@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
 import type { Rgb } from "./lib/types";
-import { DEFAULT_SETTINGS, useScreen, useStore, useZoneColors } from "./store";
+import { DEFAULT_SETTINGS, useLive, useScreen, useStore } from "./store";
 import { startSync } from "./sync";
 import { listeners } from "./test/mockApi";
 
@@ -9,7 +9,7 @@ vi.mock("./lib/api", async () => (await import("./test/mockApi")).mockApiModule(
 
 beforeEach(() => {
   useStore.setState({ devices: [], enabled: false, settings: DEFAULT_SETTINGS });
-  useZoneColors.setState({ colors: null });
+  useLive.setState({ paths: {} });
 });
 
 describe("startSync", () => {
@@ -26,16 +26,13 @@ describe("startSync", () => {
 
   it("mirrors engine events into stores", async () => {
     const stop = startSync();
-    await vi.waitFor(() => expect(listeners.zones).toBeDefined());
+    await vi.waitFor(() => expect(listeners.paths).toBeDefined());
     const c: Rgb = [1, 2, 3];
-    listeners.zones?.([c, c, c, c, c]);
-    expect(useZoneColors.getState().colors?.[0]).toEqual(c);
     listeners.paths?.([{ ip: "10.0.0.2", colors: [c, c] }]);
-    expect(useZoneColors.getState().paths["10.0.0.2"]).toEqual([c, c]);
+    expect(useLive.getState().paths["10.0.0.2"]).toEqual([c, c]);
     listeners.status?.({ running: false, error: "boom" });
     expect(useStore.getState().status.error).toBe("boom");
-    expect(useZoneColors.getState().colors).toBeNull();
-    expect(useZoneColors.getState().paths).toEqual({});
+    expect(useLive.getState().paths).toEqual({});
     stop();
   });
 

@@ -6,6 +6,7 @@ export { Button } from "tk-design-system/source/components/Button.tsx";
 export { Switch } from "tk-design-system/source/components/Choice.tsx";
 export { Accordion } from "tk-design-system/source/components/Disclosure.tsx";
 export { Input } from "tk-design-system/source/components/Field.tsx";
+export { Popover } from "tk-design-system/source/components/Popover.tsx";
 export { Eyebrow, Panel } from "tk-design-system/source/components/Primitives.tsx";
 export { Select } from "tk-design-system/source/components/Select.tsx";
 export { Toggle, ToggleGroup } from "tk-design-system/source/components/ToggleGroup.tsx";

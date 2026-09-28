@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { edgeLoop, insertIndex, reversePath, splitPath } from "./path";
+import {
+  distanceTo,
+  edgeLoop,
+  insertIndex,
+  movePath,
+  reversePath,
+  splitPath,
+  zonePath,
+} from "./path";
 
 describe("splitPath", () => {
   it("cuts a line into equal pieces", () => {
@@ -93,5 +101,61 @@ describe("insertIndex", () => {
   it("misses off the band, and uses the closing leg of a loop", () => {
     expect(insertIndex(path, [0.5, 0.5], 100, 100)).toBe(-1);
     expect(insertIndex({ ...path, closed: true }, [0.5, 0.5], 100, 100)).toBe(3);
+  });
+});
+
+describe("distanceTo", () => {
+  const path = {
+    points: [
+      [0.1, 0.5],
+      [0.9, 0.5],
+    ] as [number, number][],
+    width: 0.2,
+    closed: false,
+  };
+
+  it("is 0 or less on the band, and pixels past its edge off it", () => {
+    expect(distanceTo(path, [0.5, 0.55], 100, 100)).toBeLessThanOrEqual(0);
+    expect(distanceTo(path, [0.5, 0.8], 100, 100)).toBeCloseTo(20);
+    expect(distanceTo({ ...path, points: [] }, [0.5, 0.5], 100, 100)).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+});
+
+describe("movePath", () => {
+  it("moves every point, but not off screen", () => {
+    const p = {
+      points: [
+        [0.1, 0.2],
+        [0.5, 0.6],
+      ] as [number, number][],
+      width: 0.1,
+      closed: false,
+    };
+    expect(movePath(p, [0.1, 0.1]).points).toEqual([
+      [0.2, 0.30000000000000004],
+      [0.6, 0.7],
+    ]);
+    expect(movePath(p, [-0.5, 0.9]).points).toEqual([
+      [0, 0.6000000000000001],
+      [0.4, 1],
+    ]);
+  });
+});
+
+describe("zonePath", () => {
+  it("runs along the old edge band", () => {
+    const top = zonePath("top", 2, 0.2);
+    expect(top.points).toEqual([
+      [0, 0.1],
+      [1, 0.1],
+    ]);
+    expect(top.width).toBe(0.2);
+    expect(zonePath("left", 2, 0.2).points[0]).toEqual([0.05, 0]);
+  });
+
+  it("covers the screen for the average", () => {
+    expect(zonePath("all", 2, 0.2).width).toBe(1);
   });
 });

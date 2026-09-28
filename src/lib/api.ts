@@ -8,7 +8,6 @@ import type {
   MonitorInfo,
   Rgb,
   ScreenImage,
-  ZoneColors,
 } from "./types";
 
 const decodeRgb = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -22,8 +21,6 @@ export const api = {
   identifyDevice: (ip: string) => invoke<void>("identify_device", { ip }),
   setPower: (ip: string, on: boolean) => invoke<void>("set_power", { ip, on }),
   lightsOff: (ips: string[]) => invoke<void>("lights_off", { ips }),
-  onZones: (cb: (c: ZoneColors) => void): Promise<UnlistenFn> =>
-    listen<ZoneColors>("zones", (e) => cb(e.payload)),
   onPaths: (cb: (p: { ip: string; colors: Rgb[] }[]) => void): Promise<UnlistenFn> =>
     listen<{ ip: string; colors: Rgb[] }[]>("paths", (e) => cb(e.payload)),
   onScreen: (cb: (s: ScreenImage) => void): Promise<UnlistenFn> =>
