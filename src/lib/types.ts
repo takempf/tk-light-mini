@@ -57,7 +57,7 @@ export interface AddedDevice extends GoveeDevice {
 }
 
 /** Segment counts measured on real lights. */
-const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10 };
+const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10, H6056: 12 };
 
 /** Segments to fill in razer mode. 15 is common on Govee strips. */
 export const defaultSegments = (sku: string) => KNOWN_SEGMENTS[sku] ?? 15;
