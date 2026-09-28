@@ -49,6 +49,12 @@ describe("startSync", () => {
     watch(-1);
     expect(api.setScreenPreview).toHaveBeenLastCalledWith(false);
     stop();
+    // An editor already open when sync starts.
+    watch(1);
+    const again = startSync();
+    expect(api.setScreenPreview).toHaveBeenLastCalledWith(true);
+    watch(-1);
+    again();
   });
 
   it("only previews while visible", () => {

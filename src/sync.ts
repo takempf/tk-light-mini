@@ -21,11 +21,13 @@ export function startSync(): () => void {
   const unsubStore = useStore.subscribe(push);
 
   let screenOn = false;
-  const unsubScreen = useScreen.subscribe(({ watchers }) => {
+  const onScreen = ({ watchers }: { watchers: number }) => {
     if (watchers > 0 === screenOn) return;
     screenOn = watchers > 0;
     api.setScreenPreview(screenOn).catch(() => {});
-  });
+  };
+  onScreen(useScreen.getState());
+  const unsubScreen = useScreen.subscribe(onScreen);
 
   const onVisibility = () => {
     const visible = document.visibilityState === "visible";
