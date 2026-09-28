@@ -7,15 +7,36 @@ It's built to stay out of the way. If you're gaming, it shouldn't cost you frame
 ## Using it
 
 1. In the Govee Home app, turn on **LAN Control** for each light, then unplug the light for about 10 seconds to restart it.
-2. Open the app. It scans your network on launch. Click **Add** next to a light.
-3. Pick a color for each light. The **Screen** colors follow the picture: **Top**, **Right**, **Bottom**, **Left**, **Center** (inside the edges) or **Average** (the whole screen). A strip behind the top of the TV gets Top, a lamp to the left gets Left, and so on. The **Rainbow** colors stay fixed.
+2. Open the app. It scans your network on launch. Click **Add** next to a light. It starts out as a loop around the edge of the screen.
+3. Place each light on the screen where it sits in the room. A strip behind the top of the TV goes along the top edge, a lamp to the left goes on the left, and so on. The light takes its color from the picture under its band.
 4. Flip the switch in the title bar to **Syncing**.
 
 Turning sync off leaves the lights on their last color. **Lights off**, next to the switch, stops syncing and switches them off. Turning sync back on turns them on again.
 
 Each light has its own on/off switch. An off light is switched off and left out of syncing until you turn it back on. While syncing, the app keeps its other lights on: one switched off in the Govee app or with its own button comes back on within 10 seconds, so use the switch here instead.
 
-Click a light to open it. Inside you can rename it, pick its color, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). The Tuning sliders adjust brightness, saturation, smoothing (how slowly colors fade), edge depth (how far in from the screen edge to sample) and sample rate.
+Click a light, in the list or on the screen, to open it. Inside you can rename it, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). **Screen** makes it follow the picture. The other colors stay fixed.
+
+### Placing lights
+
+The big screen shows every light as a band over a live copy of your screen.
+
+- **Move:** drag a light's band.
+- **Reshape:** drag its points. Double-click the band to add a point, and right-click a point to remove it. The big point is where the strip starts.
+- **Draw from scratch:** **Draw**, then click out the points. **Enter** or **Done drawing** finishes.
+- **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place.
+- **Thickness** sets how wide a band of the picture the light looks at.
+- Points snap to other points and to the screen's edges and middle, with a guide line. Hold **Shift** to keep lines straight (0, 45 or 90 degrees), or **Alt** to turn snapping off.
+
+### Segments and sections
+
+With **Razer streaming** on, a light colors each of its segments on its own. The first segment follows the start of the band. Set **Segments** to the real count for the light (the app knows the H61F5 and H6056).
+
+- **Split** a light into sections to place its parts apart. For example, split the H6056's 12 segments into 6 + 6 and put one bar on each side of the TV. Pick a segment first to split before it, or split in half.
+- Each section can follow the screen or have its own fixed color.
+- Pick segments in the bar to give just those a fixed color. **Follow section** undoes it.
+
+The sliders button in the title bar has the monitor, brightness, saturation, smoothing (how slowly colors fade) and sample rate.
 
 Your lights and settings are saved between launches.
 
@@ -30,8 +51,8 @@ Your lights and settings are saved between launches.
 About 30 times a second:
 
 1. **Capture.** Windows' desktop duplication API grabs the screen. The frame stays on the GPU, which shrinks it to about 120px wide. Only that tiny image is copied back to the CPU, one frame later, so the CPU never waits on the GPU.
-2. **Pick colors.** For each edge, the center, the whole screen, and each segment of each light's path, it:
-   - ignores black letterbox bars
+2. **Pick colors.** For each segment of each light's path, it:
+   - ignores black letterbox bars (a path along the screen edge follows the picture's edge)
    - averages in linear light
    - lets bright, saturated pixels set the hue, so a dim background doesn't wash it out
    - keeps brightness true to the scene
@@ -53,7 +74,7 @@ The capture thread and its GPU work both run at low priority, so the game always
 src/                 React UI, store, IPC wrapper
 src-tauri/src/
   capture.rs         DXGI capture + GPU downscale
-  zones.rs           color extraction + smoothing
+  color.rs           color averaging, letterbox bars, smoothing
   paths.rs           per-segment sampling along drawn paths
   govee.rs           LAN discovery and control
   engine.rs          the capture -> color -> send loop
