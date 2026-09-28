@@ -218,8 +218,11 @@ export const useZoneColors = create<{
   paths: Record<string, Rgb[]>;
 }>(() => ({ colors: null, paths: {} }));
 
-/** The engine's small screen frame, while a path editor wants it. */
-export const useScreen = create<{ image: ScreenImage | null }>(() => ({ image: null }));
+/** The engine's small screen frame, sent while any path editor is open. */
+export const useScreen = create<{ image: ScreenImage | null; watchers: number }>(() => ({
+  image: null,
+  watchers: 0,
+}));
 
 export function toEngineConfig(
   s: Pick<AppState, "enabled" | "settings" | "devices">,

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
 import type { Rgb } from "./lib/types";
-import { DEFAULT_SETTINGS, useStore, useZoneColors } from "./store";
+import { DEFAULT_SETTINGS, useScreen, useStore, useZoneColors } from "./store";
 import { startSync } from "./sync";
 import { listeners } from "./test/mockApi";
 
@@ -36,6 +36,18 @@ describe("startSync", () => {
     expect(useStore.getState().status.error).toBe("boom");
     expect(useZoneColors.getState().colors).toBeNull();
     expect(useZoneColors.getState().paths).toEqual({});
+    stop();
+  });
+
+  it("sends the screen while any path editor is open", () => {
+    const stop = startSync();
+    const watch = (d: number) => useScreen.setState((s) => ({ watchers: s.watchers + d }));
+    watch(1);
+    watch(1);
+    watch(-1);
+    expect(vi.mocked(api.setScreenPreview).mock.calls).toEqual([[true]]);
+    watch(-1);
+    expect(api.setScreenPreview).toHaveBeenLastCalledWith(false);
     stop();
   });
 

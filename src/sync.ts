@@ -5,6 +5,7 @@ import { toEngineConfig, useScreen, useStore, useZoneColors } from "./store";
  * Wire the store to the Rust engine:
  * - push config on every relevant change (deduped)
  * - only stream preview colors while the window is visible
+ * - send the screen image only while a path editor wants it
  * - mirror engine status / colors back into the stores
  */
 export function startSync(): () => void {
@@ -18,6 +19,13 @@ export function startSync(): () => void {
   };
   push(useStore.getState());
   const unsubStore = useStore.subscribe(push);
+
+  let screenOn = false;
+  const unsubScreen = useScreen.subscribe(({ watchers }) => {
+    if (watchers > 0 === screenOn) return;
+    screenOn = watchers > 0;
+    api.setScreenPreview(screenOn).catch(() => {});
+  });
 
   const onVisibility = () => {
     const visible = document.visibilityState === "visible";
@@ -41,6 +49,7 @@ export function startSync(): () => void {
 
   return () => {
     unsubStore();
+    unsubScreen();
     document.removeEventListener("visibilitychange", onVisibility);
     for (const p of unlisten) p.then((fn) => fn()).catch(() => {});
   };

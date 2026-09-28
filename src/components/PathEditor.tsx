@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../lib/api";
 import { clampPoint, edgeLoop, insertIndex, reversePath, splitPath } from "../lib/path";
 import type { AddedDevice, LightPath } from "../lib/types";
 import { useScreen, useStore, useZoneColors } from "../store";
@@ -11,14 +10,11 @@ import { css } from "./ZonePreview";
 const FALLBACK = { width: 160, height: 90 };
 const DEFAULT_WIDTH = 0.12;
 
-/** Editors open: the engine sends the screen while any are. */
-let watchers = 0;
+/** Ask for the screen while mounted (see `startSync`). */
 function useScreenFeed() {
   useEffect(() => {
-    if (watchers++ === 0) api.setScreenPreview(true).catch(() => {});
-    return () => {
-      if (--watchers === 0) api.setScreenPreview(false).catch(() => {});
-    };
+    useScreen.setState((s) => ({ watchers: s.watchers + 1 }));
+    return () => useScreen.setState((s) => ({ watchers: s.watchers - 1 }));
   }, []);
 }
 
