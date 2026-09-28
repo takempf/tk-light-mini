@@ -17,7 +17,7 @@
 //!
 //! Mask bit n (LE) = segment n.
 
-use crate::zones::Rgb;
+use crate::color::Rgb;
 
 pub type Frame = [u8; 20];
 

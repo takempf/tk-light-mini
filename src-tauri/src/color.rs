@@ -1,7 +1,7 @@
-//! Turns a small downscaled screen frame into 6 "wall paint" colors.
+//! Turns screen pixels into "wall paint" colors.
 //!
 //! Goals: the light should look like the screen is spilling onto the wall.
-//! - Ignore letterbox / pillarbox bars.
+//! - Ignore letterbox / pillarbox bars (see `content_rect`).
 //! - Average in linear light, so mixes look right.
 //! - Weight saturated and bright pixels more, so a dim background does not
 //!   wash out the dominant hue.
@@ -12,34 +12,6 @@ use std::sync::OnceLock;
 
 pub type Rgb = [u8; 3];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Zone {
-    Top,
-    Left,
-    Bottom,
-    Right,
-    /// The whole screen.
-    All,
-    /// Inside the edge bands.
-    Center,
-}
-
-impl Zone {
-    pub const COUNT: usize = 6;
-
-    pub fn index(self) -> usize {
-        match self {
-            Zone::Top => 0,
-            Zone::Left => 1,
-            Zone::Bottom => 2,
-            Zone::Right => 3,
-            Zone::All => 4,
-            Zone::Center => 5,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Tuning {
@@ -47,8 +19,6 @@ pub struct Tuning {
     pub saturation: f32,
     /// Output multiplier. 1.0 = unchanged.
     pub brightness: f32,
-    /// Edge band depth as a fraction of the picture (0.05..0.5).
-    pub depth: f32,
     /// 0 = instant, 1 = very slow fades.
     pub smoothing: f32,
 }
@@ -58,7 +28,6 @@ impl Default for Tuning {
         Self {
             saturation: 1.3,
             brightness: 1.0,
-            depth: 0.15,
             smoothing: 0.5,
         }
     }
@@ -231,9 +200,26 @@ fn col_is_bar(frame: &Frame, x: usize, y0: usize, y1: usize) -> bool {
     true
 }
 
-/// Content rect `(x0, y0, x1, y1)` with black bars removed.
-fn content_rect(frame: &Frame) -> (usize, usize, usize, usize) {
+/// The picture inside a frame, in pixels: `x0..x1` by `y0..y1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rect {
+    pub x0: usize,
+    pub y0: usize,
+    pub x1: usize,
+    pub y1: usize,
+}
+
+/// The frame with black letterbox and pillarbox bars removed.
+pub fn content_rect(frame: &Frame) -> Rect {
     let (w, h) = (frame.width, frame.height);
+    if w == 0 || h == 0 {
+        return Rect {
+            x0: 0,
+            y0: 0,
+            x1: w,
+            y1: h,
+        };
+    }
     let max_y = ((h as f32) * MAX_BAR) as usize;
     let max_x = ((w as f32) * MAX_BAR) as usize;
     let mut y0 = 0;
@@ -252,56 +238,7 @@ fn content_rect(frame: &Frame) -> (usize, usize, usize, usize) {
     while w - x1 < max_x && col_is_bar(frame, x1 - 1, y0, y1) {
         x1 -= 1;
     }
-    (x0, y0, x1, y1)
-}
-
-/// Extract colors in `Zone::index` order: top, left, bottom, right, all, center.
-pub fn extract(frame: &Frame, t: &Tuning) -> [Rgb; Zone::COUNT] {
-    if frame.width == 0 || frame.height == 0 {
-        return [[0; 3]; Zone::COUNT];
-    }
-    let (x0, y0, x1, y1) = content_rect(frame);
-    let depth = t.depth.clamp(0.02, 0.5);
-    let band_h = (((y1 - y0) as f32 * depth) as usize).max(1);
-    let band_w = (((x1 - x0) as f32 * depth) as usize).max(1);
-    let (top_end, bottom_start) = (y0 + band_h, y1.saturating_sub(band_h));
-    let (left_end, right_start) = (x0 + band_w, x1.saturating_sub(band_w));
-
-    // Pixels in two bands (the corners) go to the nearer edge, measured in band
-    // depths, so each side is a trapezoid mitered along the corner diagonal.
-    let (inv_h, inv_w) = (1.0 / band_h as f32, 1.0 / band_w as f32);
-    let mut acc = [Acc::default(); Zone::COUNT];
-    for y in y0..y1 {
-        let top = y < top_end;
-        let bottom = y >= bottom_start;
-        let d_top = (y - y0) as f32 * inv_h;
-        let d_bottom = (y1 - 1 - y) as f32 * inv_h;
-        for x in x0..x1 {
-            let p = read_px(frame, x, y);
-            acc[4].add(p);
-            let left = x < left_end;
-            let right = x >= right_start;
-            if !(top || bottom || left || right) {
-                acc[5].add(p);
-                continue;
-            }
-            let mut side = 0;
-            let mut nearest = f32::MAX;
-            for (z, inside, d) in [
-                (0, top, d_top),
-                (1, left, (x - x0) as f32 * inv_w),
-                (2, bottom, d_bottom),
-                (3, right, (x1 - 1 - x) as f32 * inv_w),
-            ] {
-                if inside && d < nearest {
-                    side = z;
-                    nearest = d;
-                }
-            }
-            acc[side].add(p);
-        }
-    }
-    acc.map(|a| a.finish(t))
+    Rect { x0, y0, x1, y1 }
 }
 
 /// Frame-rate independent exponential smoothing for a list of colors.
@@ -372,9 +309,20 @@ mod tests {
     const NEUTRAL: Tuning = Tuning {
         saturation: 1.0,
         brightness: 1.0,
-        depth: 0.2,
         smoothing: 0.0,
     };
+
+    /// The whole picture as one color.
+    fn average(f: &Frame, t: &Tuning) -> Rgb {
+        let r = content_rect(f);
+        let mut acc = Acc::default();
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                acc.add(read_px(f, x, y));
+            }
+        }
+        acc.finish(t)
+    }
 
     fn near(a: Rgb, b: Rgb, tol: i32) -> bool {
         (0..3).all(|i| (a[i] as i32 - b[i] as i32).abs() <= tol)
@@ -383,16 +331,14 @@ mod tests {
     #[test]
     fn solid_color_passes_through() {
         let img = Img::new(64, 36, [200, 40, 10]);
-        let z = extract(&img.frame(), &NEUTRAL);
-        for c in z {
-            assert!(near(c, [200, 40, 10], 2), "{c:?}");
-        }
+        let c = average(&img.frame(), &NEUTRAL);
+        assert!(near(c, [200, 40, 10], 2), "{c:?}");
     }
 
     #[test]
     fn black_is_black() {
         let img = Img::new(64, 36, [0, 0, 0]);
-        assert_eq!(extract(&img.frame(), &NEUTRAL), [[0; 3]; Zone::COUNT]);
+        assert_eq!(average(&img.frame(), &NEUTRAL), [0, 0, 0]);
     }
 
     #[test]
@@ -402,67 +348,33 @@ mod tests {
             saturation: 2.0,
             ..NEUTRAL
         };
-        let z = extract(&img.frame(), &t);
-        assert!(near(z[4], [128, 128, 128], 1), "{:?}", z[4]);
+        let c = average(&img.frame(), &t);
+        assert!(near(c, [128, 128, 128], 1), "{c:?}");
     }
 
     #[test]
-    fn zones_follow_edges() {
-        let mut img = Img::new(80, 40, [0, 0, 0]);
-        img.fill(0, 0, 80, 20, [0, 0, 255]); // top half blue
-        img.fill(0, 20, 80, 40, [0, 255, 0]); // bottom half green
-        img.fill(0, 0, 8, 40, [255, 0, 0]); // left strip red
-        img.fill(72, 0, 80, 40, [255, 255, 0]); // right strip yellow
-        let t = Tuning {
-            depth: 0.1,
-            ..NEUTRAL
-        }; // 8px side bands
-        let z = extract(&img.frame(), &t);
-        let dominant = |c: Rgb| c.iter().enumerate().max_by_key(|(_, v)| **v).unwrap().0;
-        assert_eq!(dominant(z[Zone::Top.index()]), 2);
-        assert_eq!(dominant(z[Zone::Bottom.index()]), 1);
-        assert_eq!(dominant(z[Zone::Left.index()]), 0);
-        let r = z[Zone::Right.index()];
-        assert!(r[0] > 150 && r[1] > 150 && r[2] < 60, "{r:?}");
-    }
-
-    #[test]
-    fn corners_split_along_the_diagonal() {
-        // 100x100, 20% bands. Dim gray, so it isn't cropped as letterbox.
-        let mut img = Img::new(100, 100, [30, 30, 30]);
-        img.fill(10, 2, 11, 3, [255, 0, 0]); // top-left corner, near the top edge
-        img.fill(2, 10, 3, 11, [0, 0, 255]); // top-left corner, near the left edge
-        let t = Tuning {
-            depth: 0.2,
-            ..NEUTRAL
-        };
-        let z = extract(&img.frame(), &t);
-        let (top, left) = (z[Zone::Top.index()], z[Zone::Left.index()]);
-        assert!(top[0] > top[2] + 20, "{top:?}");
-        assert!(left[2] > left[0] + 20, "{left:?}");
-    }
-
-    #[test]
-    fn center_is_inside_the_bands() {
-        let mut img = Img::new(100, 100, [30, 30, 30]);
-        img.fill(40, 40, 60, 60, [0, 255, 0]);
-        let t = Tuning {
-            depth: 0.2,
-            ..NEUTRAL
-        };
-        let z = extract(&img.frame(), &t);
-        let c = z[Zone::Center.index()];
-        assert!(c[1] > c[0] + 50, "{c:?}");
-        assert!(z[Zone::Top.index()][1] < 40, "edges don't see it: {z:?}");
-    }
-
-    #[test]
-    fn letterbox_bars_are_ignored() {
+    fn letterbox_bars_are_cropped() {
         let mut img = Img::new(64, 40, [0, 0, 0]);
         img.fill(0, 6, 64, 34, [220, 30, 30]);
-        let z = extract(&img.frame(), &NEUTRAL);
-        assert!(z[Zone::Top.index()][0] > 180, "{:?}", z[0]);
-        assert!(z[Zone::Bottom.index()][0] > 180, "{:?}", z[2]);
+        let r = content_rect(&img.frame());
+        assert_eq!(
+            r,
+            Rect {
+                x0: 0,
+                y0: 6,
+                x1: 64,
+                y1: 34
+            }
+        );
+        assert!(average(&img.frame(), &NEUTRAL)[0] > 180);
+    }
+
+    #[test]
+    fn pillarbox_bars_are_cropped() {
+        let mut img = Img::new(64, 40, [0, 0, 0]);
+        img.fill(8, 0, 56, 40, [30, 220, 30]);
+        let r = content_rect(&img.frame());
+        assert_eq!((r.x0, r.x1, r.y0, r.y1), (8, 56, 0, 40));
     }
 
     #[test]
@@ -470,8 +382,8 @@ mod tests {
         // 70% dull gray, 30% vivid blue: hue should lean clearly blue.
         let mut img = Img::new(100, 10, [90, 90, 90]);
         img.fill(0, 0, 30, 10, [20, 40, 255]);
-        let z = extract(&img.frame(), &NEUTRAL)[Zone::All.index()];
-        assert!(z[2] as i32 - z[0] as i32 > 40, "{z:?}");
+        let c = average(&img.frame(), &NEUTRAL);
+        assert!(c[2] as i32 - c[0] as i32 > 40, "{c:?}");
     }
 
     #[test]
@@ -481,8 +393,8 @@ mod tests {
             brightness: 0.5,
             ..NEUTRAL
         };
-        let z = extract(&img.frame(), &t)[4];
-        assert!(near(z, [100, 50, 25], 2), "{z:?}");
+        let c = average(&img.frame(), &t);
+        assert!(near(c, [100, 50, 25], 2), "{c:?}");
     }
 
     #[test]
@@ -505,14 +417,14 @@ mod tests {
             height: h,
             stride,
         };
-        assert!(near(extract(&f, &NEUTRAL)[4], [255, 0, 0], 1));
+        assert!(near(average(&f, &NEUTRAL), [255, 0, 0], 1));
     }
 
     #[test]
     fn smoother_instant_when_zero() {
         let mut s = Smoother::default();
-        let a = [[0u8; 3]; Zone::COUNT];
-        let b = [[255u8; 3]; Zone::COUNT];
+        let a = [[0u8; 3]; 6];
+        let b = [[255u8; 3]; 6];
         s.update(&a, 0.033, 0.0);
         assert_eq!(s.update(&b, 0.033, 0.0), b);
     }
@@ -520,8 +432,8 @@ mod tests {
     #[test]
     fn smoother_converges() {
         let mut s = Smoother::default();
-        s.update(&[[0; 3]; Zone::COUNT], 0.033, 0.5);
-        let target = [[255; 3]; Zone::COUNT];
+        s.update(&[[0; 3]; 6], 0.033, 0.5);
+        let target = [[255; 3]; 6];
         let first = s.update(&target, 0.033, 0.5)[0][0];
         assert!(first > 0 && first < 255);
         let mut last = first;

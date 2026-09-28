@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 
+use crate::color::Rgb;
 #[cfg(test)]
 use crate::ptreal::Frame;
-use crate::zones::Rgb;
 
 const SCAN_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 const SCAN_PORT: u16 = 4001;

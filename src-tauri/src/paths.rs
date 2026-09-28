@@ -4,10 +4,13 @@
 //! Each pixel within half the thickness of the path goes to the nearest point
 //! on it. How far along the path that point is picks the segment, so pixels at
 //! a corner count once, for the nearer leg.
+//!
+//! Paths are drawn over the whole screen but laid over the picture: with
+//! letterbox bars, a path along the screen edge follows the picture's edge.
 
 use serde::Deserialize;
 
-use crate::zones::{read_px, Acc, Frame, Rgb, Tuning};
+use crate::color::{read_px, Acc, Frame, Rect, Rgb, Tuning};
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,11 +32,17 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn new(p: &PathConfig, w: usize, h: usize) -> Self {
+    fn new(p: &PathConfig, r: Rect) -> Self {
+        let (w, h) = ((r.x1 - r.x0) as f32, (r.y1 - r.y0) as f32);
         let mut pts: Vec<[f32; 2]> = p
             .points
             .iter()
-            .map(|[x, y]| [x.clamp(0.0, 1.0) * w as f32, y.clamp(0.0, 1.0) * h as f32])
+            .map(|[x, y]| {
+                [
+                    r.x0 as f32 + x.clamp(0.0, 1.0) * w,
+                    r.y0 as f32 + y.clamp(0.0, 1.0) * h,
+                ]
+            })
             .collect();
         if p.closed && pts.len() > 2 {
             pts.push(pts[0]);
@@ -108,10 +117,12 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     dist2(a, b).sqrt()
 }
 
-/// Which pixels feed which segment, for one path, segment count and frame size.
+/// Which pixels feed which segment, for one path, segment count, frame size
+/// and picture rect.
 pub struct PathSampler {
     w: usize,
     h: usize,
+    rect: Rect,
     segments: usize,
     /// `(x, y, segment)`, in row order.
     pixels: Vec<(u16, u16, u16)>,
@@ -119,17 +130,18 @@ pub struct PathSampler {
 }
 
 impl PathSampler {
-    pub fn new(p: &PathConfig, segments: usize, w: usize, h: usize) -> Self {
+    /// `rect` is the picture within the `w`x`h` frame.
+    pub fn new(p: &PathConfig, segments: usize, w: usize, h: usize, rect: Rect) -> Self {
         let n = segments.max(1);
-        let g = Geometry::new(p, w, h);
+        let g = Geometry::new(p, rect);
         let total = g.total();
         // At least one pixel wide, so thin paths still hit something.
-        let r = (p.width.max(0.0) * h as f32 / 2.0).max(0.71);
+        let r = (p.width.max(0.0) * (rect.y1 - rect.y0) as f32 / 2.0).max(0.71);
         let mut pixels = Vec::new();
         let mut hit = vec![false; n];
         if !g.pts.is_empty() {
-            for y in 0..h {
-                for x in 0..w {
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
                     let (d2, at) = g.nearest([x as f32 + 0.5, y as f32 + 0.5]);
                     if d2 <= r * r {
                         let s = segment_at(at, total, n);
@@ -150,15 +162,16 @@ impl PathSampler {
         Self {
             w,
             h,
+            rect,
             segments: n,
             pixels,
             acc: vec![Acc::default(); n],
         }
     }
 
-    /// Still valid for this segment count and frame size.
-    pub fn fits(&self, segments: usize, w: usize, h: usize) -> bool {
-        self.segments == segments.max(1) && self.w == w && self.h == h
+    /// Still valid for this segment count, frame size and picture rect.
+    pub fn fits(&self, segments: usize, w: usize, h: usize, rect: Rect) -> bool {
+        self.segments == segments.max(1) && self.w == w && self.h == h && self.rect == rect
     }
 
     /// One color per segment. `out` is resized to the segment count.
@@ -188,9 +201,17 @@ mod tests {
     const NEUTRAL: Tuning = Tuning {
         saturation: 1.0,
         brightness: 1.0,
-        depth: 0.2,
         smoothing: 0.0,
     };
+
+    fn full(w: usize, h: usize) -> Rect {
+        Rect {
+            x0: 0,
+            y0: 0,
+            x1: w,
+            y1: h,
+        }
+    }
 
     /// BGRA frame, filled by `f(x, y) -> rgb`.
     fn frame_data(w: usize, h: usize, f: impl Fn(usize, usize) -> Rgb) -> Vec<u8> {
@@ -227,7 +248,7 @@ mod tests {
         let (w, h) = (100, 50);
         let d = frame_data(w, h, |x, _| if x < 50 { [255, 0, 0] } else { [0, 0, 255] });
         let p = line(&[[0.0, 0.5], [1.0, 0.5]], 0.2, false);
-        let mut s = PathSampler::new(&p, 2, w, h);
+        let mut s = PathSampler::new(&p, 2, w, h, full(w, h));
         let mut out = Vec::new();
         s.sample(&frame(&d, w, h), &NEUTRAL, &mut out);
         assert_eq!(out, [[255, 0, 0], [0, 0, 255]]);
@@ -239,7 +260,7 @@ mod tests {
         let d = frame_data(w, h, |x, _| if x < 50 { [255, 0, 0] } else { [0, 0, 255] });
         let p = line(&[[1.0, 0.5], [0.0, 0.5]], 0.2, false);
         let mut out = Vec::new();
-        PathSampler::new(&p, 2, w, h).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
+        PathSampler::new(&p, 2, w, h, full(w, h)).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
         assert_eq!(out, [[0, 0, 255], [255, 0, 0]]);
     }
 
@@ -250,7 +271,7 @@ mod tests {
         let d = frame_data(w, h, |_, y| if y < 20 { [0, 255, 0] } else { [40, 40, 40] });
         let p = line(&[[0.0, 0.9], [1.0, 0.9]], 0.1, false);
         let mut out = Vec::new();
-        PathSampler::new(&p, 1, w, h).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
+        PathSampler::new(&p, 1, w, h, full(w, h)).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
         assert_eq!(out, [[40, 40, 40]]);
     }
 
@@ -262,7 +283,7 @@ mod tests {
             0.15,
             true,
         );
-        let s = PathSampler::new(&p, 8, w, h);
+        let s = PathSampler::new(&p, 8, w, h, full(w, h));
         let mut seen = std::collections::HashSet::new();
         for &(x, y, seg) in &s.pixels {
             assert!(seen.insert((x, y)), "pixel counted twice");
@@ -278,7 +299,7 @@ mod tests {
     fn tiny_segments_still_get_a_pixel() {
         let (w, h) = (20, 10);
         let p = line(&[[0.0, 0.5], [1.0, 0.5]], 0.0, false);
-        let s = PathSampler::new(&p, 60, w, h);
+        let s = PathSampler::new(&p, 60, w, h, full(w, h));
         let segs: std::collections::HashSet<u16> = s.pixels.iter().map(|p| p.2).collect();
         assert_eq!(segs.len(), 60);
     }
@@ -289,17 +310,46 @@ mod tests {
         let d = frame_data(w, h, |_, _| [200, 200, 200]);
         let p = line(&[], 0.1, false);
         let mut out = Vec::new();
-        PathSampler::new(&p, 3, w, h).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
+        PathSampler::new(&p, 3, w, h, full(w, h)).sample(&frame(&d, w, h), &NEUTRAL, &mut out);
         assert_eq!(out, [[0, 0, 0]; 3]);
     }
 
     #[test]
     fn refits_on_size_or_count_change() {
         let p = line(&[[0.0, 0.5], [1.0, 0.5]], 0.1, false);
-        let s = PathSampler::new(&p, 4, 100, 50);
-        assert!(s.fits(4, 100, 50));
-        assert!(!s.fits(5, 100, 50));
-        assert!(!s.fits(4, 120, 50));
+        let s = PathSampler::new(&p, 4, 100, 50, full(100, 50));
+        assert!(s.fits(4, 100, 50, full(100, 50)));
+        assert!(!s.fits(5, 100, 50, full(100, 50)));
+        assert!(!s.fits(4, 120, 50, full(120, 50)));
+        let boxed = Rect {
+            y0: 5,
+            y1: 45,
+            ..full(100, 50)
+        };
+        assert!(!s.fits(4, 100, 50, boxed));
+    }
+
+    #[test]
+    fn follows_the_picture_inside_letterbox_bars() {
+        // Bars 10px top and bottom; the picture is red on top, blue below.
+        let (w, h) = (100, 60);
+        let d = frame_data(w, h, |_, y| match y {
+            10..30 => [255, 0, 0],
+            30..50 => [0, 0, 255],
+            _ => [0, 0, 0],
+        });
+        let rect = Rect {
+            y0: 10,
+            y1: 50,
+            ..full(w, h)
+        };
+        // Along the top edge: the picture's top, not the bar.
+        let top = line(&[[0.0, 0.05], [1.0, 0.05]], 0.1, false);
+        let mut s = PathSampler::new(&top, 1, w, h, rect);
+        assert!(s.pixels.iter().all(|&(_, y, _)| (10..50).contains(&y)));
+        let mut out = Vec::new();
+        s.sample(&frame(&d, w, h), &NEUTRAL, &mut out);
+        assert_eq!(out, [[255, 0, 0]]);
     }
 
     /// Real desktop: an edge loop of 10 segments over a captured frame, with
@@ -319,7 +369,8 @@ mod tests {
             let r = c
                 .poll(|f| {
                     let t0 = Instant::now();
-                    let mut s = PathSampler::new(&loop_, 10, f.width, f.height);
+                    let rect = crate::color::content_rect(f);
+                    let mut s = PathSampler::new(&loop_, 10, f.width, f.height, rect);
                     let built = t0.elapsed();
                     let t1 = Instant::now();
                     let mut out = Vec::new();

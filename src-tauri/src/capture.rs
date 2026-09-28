@@ -7,7 +7,7 @@
 
 use serde::Serialize;
 
-use crate::zones::Frame;
+use crate::color::Frame;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -347,21 +347,18 @@ mod tests {
     #[ignore]
     fn live_capture() {
         use super::Capturer;
-        use crate::zones::{extract, Tuning};
+        use crate::color::content_rect;
         let mut c = Capturer::new(0).expect("create capturer");
         let mut got = None;
         for _ in 0..60 {
-            if let Some(r) = c
-                .poll(|f| (f.width, f.height, extract(f, &Tuning::default())))
-                .unwrap()
-            {
+            if let Some(r) = c.poll(|f| (f.width, f.height, content_rect(f))).unwrap() {
                 got = Some(r);
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(33));
         }
-        let (w, h, zones) = got.expect("no frame within 2s");
-        println!("sampled {w}x{h}: {zones:?}");
+        let (w, h, rect) = got.expect("no frame within 2s");
+        println!("sampled {w}x{h}, picture {rect:?}");
         assert!(w >= 96);
     }
 }

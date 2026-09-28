@@ -1,10 +1,10 @@
 mod capture;
+mod color;
 mod engine;
 mod govee;
 mod paths;
 #[cfg(test)]
 mod ptreal;
-mod zones;
 
 use std::time::Duration;
 use tauri::{AppHandle, Manager, RunEvent, State};
