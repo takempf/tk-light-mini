@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { edgeLoop, reversePath, splitPath } from "./path";
+import { edgeLoop, insertIndex, reversePath, splitPath } from "./path";
 
 describe("splitPath", () => {
   it("cuts a line into equal pieces", () => {
@@ -71,5 +71,27 @@ describe("reversePath", () => {
       [1, 0],
     ]);
     expect(reversePath({ ...p, closed: false }).points[0]).toEqual([1, 1]);
+  });
+});
+
+describe("insertIndex", () => {
+  const path = {
+    points: [
+      [0.1, 0.1],
+      [0.9, 0.1],
+      [0.9, 0.9],
+    ] as [number, number][],
+    width: 0.1,
+    closed: false,
+  };
+
+  it("finds the leg under the click", () => {
+    expect(insertIndex(path, [0.5, 0.12], 100, 100)).toBe(1);
+    expect(insertIndex(path, [0.88, 0.5], 100, 100)).toBe(2);
+  });
+
+  it("misses off the band, and uses the closing leg of a loop", () => {
+    expect(insertIndex(path, [0.5, 0.5], 100, 100)).toBe(-1);
+    expect(insertIndex({ ...path, closed: true }, [0.5, 0.5], 100, 100)).toBe(3);
   });
 });

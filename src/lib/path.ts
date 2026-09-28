@@ -64,3 +64,30 @@ export function reversePath(p: LightPath): LightPath {
   const points = p.closed && first ? [first, ...rest.reverse()] : [...p.points].reverse();
   return { ...p, points };
 }
+
+/**
+ * Where a click at `p` (screen fractions) falls on the path: the index to insert
+ * a new point at, or -1 when it's off the band. On a `w`x`h` screen.
+ */
+export function insertIndex(path: LightPath, p: Pt, w: number, h: number): number {
+  const pts = path.points.map(([x, y]) => [x * w, y * h] as Pt);
+  const n = pts.length;
+  if (n < 2) return -1;
+  const [cx, cy] = [p[0] * w, p[1] * h];
+  const reach = Math.max((path.width * h) / 2, 1);
+  let best = -1;
+  let bestD = reach;
+  const edges = path.closed && n > 2 ? n : n - 1;
+  for (let k = 0; k < edges; k++) {
+    const [a, b] = [pts[k] as Pt, pts[(k + 1) % n] as Pt];
+    const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+    const len2 = dx * dx + dy * dy;
+    const u = len2 > 0 ? Math.min(1, Math.max(0, ((cx - a[0]) * dx + (cy - a[1]) * dy) / len2)) : 0;
+    const d = Math.hypot(cx - (a[0] + dx * u), cy - (a[1] + dy * u));
+    if (d <= bestD) {
+      bestD = d;
+      best = k + 1;
+    }
+  }
+  return best;
+}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { clampPoint, edgeLoop, reversePath, splitPath } from "../lib/path";
+import { clampPoint, edgeLoop, insertIndex, reversePath, splitPath } from "../lib/path";
 import type { AddedDevice, LightPath } from "../lib/types";
 import { useScreen, useStore, useZoneColors } from "../store";
 import { Button, Switch } from "../ui";
@@ -79,7 +79,16 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
           aria-label={`Path for ${device.name || device.sku}`}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
-            update({ points: [...path.points, at(e)] });
+            const p = at(e);
+            const i = insertIndex(path, p, W, H);
+            if (i < 0) {
+              update({ points: [...path.points, p] });
+              return;
+            }
+            // On the band: add a point there and drag it.
+            update({ points: [...path.points.slice(0, i), p, ...path.points.slice(i)] });
+            svg.current?.setPointerCapture(e.pointerId);
+            setDragging(i);
           }}
           onPointerMove={(e) => {
             if (dragging === null) return;
@@ -168,8 +177,8 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
         </svg>
       </div>
       <p className="meta">
-        Click to add points, from where the strip starts. Drag to move, right-click (or Delete) to
-        remove.
+        Click to add points, from where the strip starts. Click the band to add a point there. Drag
+        to move, right-click (or Delete) to remove.
       </p>
       <Switch checked={path.closed} onCheckedChange={(closed: boolean) => update({ closed })}>
         Closed loop

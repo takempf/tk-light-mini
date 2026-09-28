@@ -188,6 +188,12 @@ describe("App", () => {
     fireEvent.pointerMove(svg, { clientX: 180, clientY: 10 });
     fireEvent.pointerUp(svg);
     expect(dev()?.path?.points[1]).toEqual([0.9, 0.1]);
+    // A click on the band inserts a point there, between the two.
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 30 });
+    fireEvent.pointerUp(svg);
+    expect(dev()?.path?.points).toHaveLength(3);
+    expect(dev()?.path?.points[1]).toEqual([0.5, 0.3]);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Point 2" }));
     fireEvent.contextMenu(screen.getByRole("button", { name: "Point 1, start" }));
     expect(dev()?.path?.points).toEqual([[0.9, 0.1]]);
 
