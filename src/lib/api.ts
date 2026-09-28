@@ -19,7 +19,6 @@ export const api = {
   listMonitors: () => invoke<MonitorInfo[]>("list_monitors"),
   setConfig: (config: EngineConfig) => invoke<void>("set_config", { config }),
   setPreview: (enabled: boolean) => invoke<void>("set_preview", { enabled }),
-  setScreenPreview: (enabled: boolean) => invoke<void>("set_screen_preview", { enabled }),
   identifyDevice: (ip: string) => invoke<void>("identify_device", { ip }),
   setPower: (ip: string, on: boolean) => invoke<void>("set_power", { ip, on }),
   lightsOff: (ips: string[]) => invoke<void>("lights_off", { ips }),

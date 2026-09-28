@@ -39,22 +39,13 @@ describe("startSync", () => {
     stop();
   });
 
-  it("sends the screen while any path editor is open", () => {
+  it("keeps the one screen image in a shared store", async () => {
     const stop = startSync();
-    const watch = (d: number) => useScreen.setState((s) => ({ watchers: s.watchers + d }));
-    watch(1);
-    watch(1);
-    watch(-1);
-    expect(vi.mocked(api.setScreenPreview).mock.calls).toEqual([[true]]);
-    watch(-1);
-    expect(api.setScreenPreview).toHaveBeenLastCalledWith(false);
+    await vi.waitFor(() => expect(listeners.screen).toBeDefined());
+    const image = { width: 2, height: 1, rgb: new Uint8Array([1, 2, 3, 4, 5, 6]) };
+    listeners.screen?.(image);
+    expect(useScreen.getState().image).toBe(image);
     stop();
-    // An editor already open when sync starts.
-    watch(1);
-    const again = startSync();
-    expect(api.setScreenPreview).toHaveBeenLastCalledWith(true);
-    watch(-1);
-    again();
   });
 
   it("only previews while visible", () => {

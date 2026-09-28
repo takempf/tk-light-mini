@@ -99,7 +99,7 @@ Open a light and click **Draw path**. You get the screen as the app sees it (abo
 
 The band is split along its length into one piece per segment, numbered from the start, each shown in its live color. A new path switches the light to the **Path** color (in the Screen palette), so segment 1 shows piece 1, and so on. You can still set single segments to other colors. Without razer streaming, the whole path is one color for the whole light.
 
-Each pixel near the path goes to the nearest point on it, so at a corner a pixel counts once, for the nearer side. The editor keeps the screen capture running even while sync is off, but only sends to lights while syncing.
+Each pixel near the path goes to the nearest point on it, so at a corner a pixel counts once, for the nearer side. While the window is visible, the app keeps capturing even with sync off, so the editor always has the screen. It only sends to lights while syncing, and stops capturing when minimized.
 
 When sync stops or the switch goes off, the light goes back to its normal mode.
 

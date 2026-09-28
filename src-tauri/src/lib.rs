@@ -31,16 +31,11 @@ fn set_config(app: AppHandle, engine: State<'_, Engine>, config: EngineConfig) {
     engine.apply(&app, config);
 }
 
+/// While the window is visible, the engine captures (even with sync off) and
+/// sends live colors and the small screen image.
 #[tauri::command]
-fn set_preview(engine: State<'_, Engine>, enabled: bool) {
-    engine.set_preview(enabled);
-}
-
-/// Send the small screen frame while a path is being drawn. Keeps capture
-/// running even with sync off.
-#[tauri::command]
-fn set_screen_preview(app: AppHandle, engine: State<'_, Engine>, enabled: bool) {
-    engine.set_screen(&app, enabled);
+fn set_preview(app: AppHandle, engine: State<'_, Engine>, enabled: bool) {
+    engine.set_preview(&app, enabled);
 }
 
 /// Pulse a light so the user can tell which one it is. The engine leaves it
@@ -105,7 +100,6 @@ pub fn run() {
             list_monitors,
             set_config,
             set_preview,
-            set_screen_preview,
             identify_device,
             set_power,
             lights_off

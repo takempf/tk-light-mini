@@ -310,7 +310,11 @@ mod tests {
         use crate::capture::Capturer;
         use std::time::{Duration, Instant};
         let mut c = Capturer::new(0).expect("create capturer");
-        let loop_ = line(&[[0.95, 0.9], [0.95, 0.1], [0.05, 0.1], [0.05, 0.9]], 0.12, true);
+        let loop_ = line(
+            &[[0.95, 0.9], [0.95, 0.1], [0.05, 0.1], [0.05, 0.9]],
+            0.12,
+            true,
+        );
         for _ in 0..60 {
             let r = c
                 .poll(|f| {

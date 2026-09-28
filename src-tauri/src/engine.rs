@@ -154,9 +154,9 @@ struct Shared {
     config: Mutex<EngineConfig>,
     generation: AtomicU64,
     stop: AtomicBool,
+    /// The window is visible: send live colors and the screen image, and keep
+    /// capturing even with sync off (for the path editor).
     preview: AtomicBool,
-    /// Someone is drawing a path: capture even with sync off, and send frames.
-    screen: AtomicBool,
     /// Lights the engine leaves alone until the given time (while identifying).
     held: Mutex<Vec<(SocketAddr, Instant)>>,
 }
@@ -174,7 +174,6 @@ impl Default for Engine {
                 generation: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
                 preview: AtomicBool::new(false),
-                screen: AtomicBool::new(false),
                 held: Mutex::new(Vec::new()),
             }),
             thread: Mutex::new(None),
@@ -189,15 +188,15 @@ impl Engine {
         self.reconcile(app);
     }
 
-    /// Send the screen image while `on`. Keeps capture running with sync off.
-    pub fn set_screen(&self, app: &AppHandle, on: bool) {
-        self.shared.screen.store(on, Ordering::Release);
+    /// Send live colors and the screen image while the window is visible.
+    pub fn set_preview(&self, app: &AppHandle, on: bool) {
+        self.shared.preview.store(on, Ordering::Release);
         self.reconcile(app);
     }
 
-    /// Run the thread while syncing or while someone wants the screen.
+    /// Run the thread while syncing or while the window shows the screen.
     fn reconcile(&self, app: &AppHandle) {
-        let want = self.shared.config.lock().enabled || self.shared.screen.load(Ordering::Acquire);
+        let want = self.shared.config.lock().enabled || self.shared.preview.load(Ordering::Acquire);
         let mut thread = self.thread.lock();
         if want && thread.as_ref().is_none_or(|t| t.is_finished()) {
             self.shared.stop.store(false, Ordering::Release);
@@ -210,10 +209,6 @@ impl Engine {
         } else if !want {
             self.stop_locked(&mut thread);
         }
-    }
-
-    pub fn set_preview(&self, on: bool) {
-        self.shared.preview.store(on, Ordering::Relaxed);
     }
 
     /// Stop sending to `addr` for `d`, then resend its color.
@@ -435,7 +430,6 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     let mut last_preview = Instant::now() - PREVIEW_INTERVAL;
     let mut last_screen = Instant::now() - SCREEN_INTERVAL;
     let mut screen_dirty = false;
-    let mut screen_was_on = false;
     let mut turned_on: Vec<SocketAddr> = Vec::new();
     let mut segment_colors: Vec<Rgb> = Vec::new();
 
@@ -568,7 +562,8 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
             }
         }
 
-        if shared.preview.load(Ordering::Relaxed) && last_preview.elapsed() >= PREVIEW_INTERVAL {
+        let preview = shared.preview.load(Ordering::Relaxed);
+        if preview && last_preview.elapsed() >= PREVIEW_INTERVAL {
             last_preview = tick;
             let _ = app.emit(EVENT_ZONES, colors);
             let paths: Vec<PathColors> = targets
@@ -582,11 +577,9 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
             let _ = app.emit(EVENT_PATHS, paths);
         }
 
-        let screen_on = shared.screen.load(Ordering::Relaxed);
-        screen_dirty |= fresh || (screen_on && !screen_was_on);
-        screen_was_on = screen_on;
-        if screen_on && screen_dirty && cache.width > 0 && last_screen.elapsed() >= SCREEN_INTERVAL
-        {
+        // The first frame counts as fresh, so a still screen still gets sent.
+        screen_dirty |= fresh;
+        if preview && screen_dirty && cache.width > 0 && last_screen.elapsed() >= SCREEN_INTERVAL {
             last_screen = tick;
             screen_dirty = false;
             let _ = app.emit(EVENT_SCREEN, cache.image());

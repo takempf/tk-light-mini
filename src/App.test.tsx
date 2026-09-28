@@ -160,7 +160,6 @@ describe("App", () => {
     expect(within(picker).queryByRole("button", { name: "Path" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Draw path" }));
-    expect(api.setScreenPreview).toHaveBeenLastCalledWith(true);
     expect(screen.getByText("Waiting for the screen…")).toBeInTheDocument();
 
     // Click twice on the (mocked 200x100) drawing area: two points.
@@ -206,7 +205,7 @@ describe("App", () => {
     expect(dev()?.color).toBe("all");
 
     await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(api.setScreenPreview).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole("img", { name: /path for strip/i })).toBeNull();
   });
 
   it("toggles sync", async () => {

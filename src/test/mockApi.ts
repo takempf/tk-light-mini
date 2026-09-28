@@ -17,7 +17,6 @@ export function mockApiModule() {
       listMonitors: vi.fn(async () => []),
       setConfig: vi.fn(async () => {}),
       setPreview: vi.fn(async () => {}),
-      setScreenPreview: vi.fn(async () => {}),
       identifyDevice: vi.fn(async () => {}),
       setPower: vi.fn(async () => {}),
       lightsOff: vi.fn(async () => {}),

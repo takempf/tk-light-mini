@@ -10,14 +10,6 @@ import { css } from "./ZonePreview";
 const FALLBACK = { width: 160, height: 90 };
 const DEFAULT_WIDTH = 0.12;
 
-/** Ask for the screen while mounted (see `startSync`). */
-function useScreenFeed() {
-  useEffect(() => {
-    useScreen.setState((s) => ({ watchers: s.watchers + 1 }));
-    return () => useScreen.setState((s) => ({ watchers: s.watchers - 1 }));
-  }, []);
-}
-
 /** The engine's small frame, scaled up with crisp pixels. */
 function ScreenCanvas() {
   const image = useScreen((s) => s.image);
@@ -43,7 +35,6 @@ function ScreenCanvas() {
  * reads, split into one piece per segment from the first point.
  */
 export function PathEditor({ device, segments }: { device: AddedDevice; segments: number }) {
-  useScreenFeed();
   const setPath = useStore((s) => s.setPath);
   const size = useScreen((s) => s.image) ?? FALLBACK;
   const live = useZoneColors((s) => s.paths[device.ip]);
