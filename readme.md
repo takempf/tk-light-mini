@@ -30,7 +30,7 @@ Your lights and settings are saved between launches.
 About 30 times a second:
 
 1. **Capture.** Windows' desktop duplication API grabs the screen. The frame stays on the GPU, which shrinks it to about 120px wide. Only that tiny image is copied back to the CPU, one frame later, so the CPU never waits on the GPU.
-2. **Pick colors.** For each edge and for the whole screen, it:
+2. **Pick colors.** For each edge, the center, the whole screen, and each segment of each light's path, it:
    - ignores black letterbox bars
    - averages in linear light
    - lets bright, saturated pixels set the hue, so a dim background doesn't wash it out
@@ -54,6 +54,7 @@ src/                 React UI, store, IPC wrapper
 src-tauri/src/
   capture.rs         DXGI capture + GPU downscale
   zones.rs           color extraction + smoothing
+  paths.rs           per-segment sampling along drawn paths
   govee.rs           LAN discovery and control
   engine.rs          the capture -> color -> send loop
   lib.rs             Tauri commands
@@ -85,6 +86,20 @@ Some lights fade slowly between colors on their own (the H61F5 takes about 3 sec
 Each light's panel has a **Razer streaming** switch. With it on, the app talks to the light in the mode Govee's DreamView and Razer Chroma use (undocumented, same as [LedFx](https://github.com/LedFx/LedFx)). Colors land at once, with no fade, so set Smoothing to taste. Lights that don't support it just stop changing, so switch it back off.
 
 In razer mode each segment can have its own color. Set **Segments** to the light's segment count, and a bar shows one cell per segment. Click cells to select them (shift-click for a range), then pick a color: it goes to just those segments. With nothing selected, the color goes to the whole light and replaces any per-segment colors. Screen colors keep following the picture.
+
+## Paths: sample exactly where the light is
+
+Zones are broad. A path says exactly which part of the screen each segment of a light reflects.
+
+Open a light and click **Draw path**. You get the screen as the app sees it (about 120 pixels wide), and you draw a line on it:
+
+- Click to add points, starting where the strip starts. Drag a point to move it. Right-click it, or select it and press Delete, to remove it.
+- **Thickness** sets how wide a band along the line is sampled.
+- **Edge loop** draws a loop around the screen edge, starting at the bottom right and going up. **Reverse** flips the direction, and **Closed loop** joins the end back to the start.
+
+The band is split along its length into one piece per segment, numbered from the start, each shown in its live color. A new path switches the light to the **Path** color (in the Screen palette), so segment 1 shows piece 1, and so on. You can still set single segments to other colors. Without razer streaming, the whole path is one color for the whole light.
+
+Each pixel near the path goes to the nearest point on it, so at a corner a pixel counts once, for the nearer side. The editor keeps the screen capture running even while sync is off, but only sends to lights while syncing.
 
 When sync stops or the switch goes off, the light goes back to its normal mode.
 

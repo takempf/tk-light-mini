@@ -62,6 +62,7 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
     return clampPoint([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
   };
   const px = path.points.map(([x, y]) => [x * W, y * H] as [number, number]);
+  const loop = path.closed && px.length > 2 ? [...px, px[0] as [number, number]] : px;
   const pieces = splitPath(px, path.closed, segments);
   const line = (pts: [number, number][]) => pts.map((p) => p.join(",")).join(" ");
   const handle = Math.max(W, H) / 70;
@@ -87,6 +88,14 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
           onPointerUp={() => setDragging(null)}
           onPointerCancel={() => setDragging(null)}
         >
+          {px.length > 1 && (
+            // A light rim around the sampled band, so it reads over any image.
+            <polyline
+              className="path-band"
+              points={line(loop)}
+              strokeWidth={path.width * H + H / 50}
+            />
+          )}
           {pieces.map((piece, i) => (
             <polyline
               // biome-ignore lint/suspicious/noArrayIndexKey: pieces are positions
@@ -97,12 +106,17 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
               strokeWidth={path.width * H}
             />
           ))}
-          {px.length > 1 && (
-            <polyline
-              className="path-line"
-              points={line(path.closed && px.length > 2 ? [...px, px[0] as [number, number]] : px)}
+          {px.length > 1 && <polyline className="path-line" points={line(loop)} />}
+          {pieces.slice(1).map((piece, i) => (
+            <circle
+              // biome-ignore lint/suspicious/noArrayIndexKey: pieces are positions
+              key={i}
+              className="path-tick"
+              cx={piece[0]?.[0]}
+              cy={piece[0]?.[1]}
+              r={handle / 2}
             />
-          )}
+          ))}
           {segments > 1 &&
             segments <= 60 &&
             pieces.map((piece, i) => {
@@ -157,6 +171,9 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
         Click to add points, from where the strip starts. Drag to move, right-click (or Delete) to
         remove.
       </p>
+      <Switch checked={path.closed} onCheckedChange={(closed: boolean) => update({ closed })}>
+        Closed loop
+      </Switch>
       <Slider
         label="Thickness"
         value={path.width}
@@ -177,9 +194,6 @@ export function PathEditor({ device, segments }: { device: AddedDevice; segments
         >
           Reverse
         </Button>
-        <Switch checked={path.closed} onCheckedChange={(closed: boolean) => update({ closed })}>
-          Closed loop
-        </Switch>
         <Button
           size="sm"
           variant="danger"

@@ -423,12 +423,23 @@ ul {
   color: var(--tk-fg-subtle);
   font-size: var(--tk-text-xs);
 }
-.path-piece {
+.path-band {
   fill: none;
-  stroke: rgb(255 255 255 / 0.25);
-  stroke-opacity: 0.85;
+  stroke: rgb(255 255 255 / 0.6);
   stroke-linejoin: round;
   stroke-linecap: butt;
+  pointer-events: none;
+}
+.path-piece {
+  fill: none;
+  stroke: #333;
+  stroke-linejoin: round;
+  stroke-linecap: butt;
+  pointer-events: none;
+}
+.path-tick {
+  fill: #fff;
+  pointer-events: none;
 }
 .path-line {
   fill: none;
