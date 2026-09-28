@@ -1,4 +1,4 @@
-import type { LightPath } from "./types";
+import type { Fit, LightPath } from "./types";
 
 type Pt = [number, number];
 
@@ -41,7 +41,8 @@ export function splitPath(points: readonly Pt[], closed: boolean, n: number): Pt
 
 /**
  * A closed loop just inside the screen edges, `width` thick, starting at the
- * bottom right and going up the right side.
+ * bottom right and going up the right side. It fits the screen both ways, so it
+ * stays flush when the thickness or the screen changes.
  */
 export function edgeLoop(aspect: number, width: number): LightPath {
   const iy = width / 2;
@@ -55,6 +56,7 @@ export function edgeLoop(aspect: number, width: number): LightPath {
     ],
     width,
     closed: true,
+    fit: { x: "fit", y: "fit" },
   };
 }
 
@@ -227,4 +229,74 @@ export function labelPoint(points: readonly Pt[], closed: boolean): Pt | undefin
   const xs = points.map(([x]) => x);
   const ys = points.map(([, y]) => y);
   return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+}
+
+/** Per axis, fitted = saved * k + b, in screen fractions. */
+interface FitMap {
+  kx: number;
+  bx: number;
+  ky: number;
+  by: number;
+}
+
+/**
+ * How a saved path maps onto a screen `aspect` wide (width over height), or
+ * undefined when it stays where it is.
+ */
+function fitMap(p: LightPath, aspect: number): FitMap | undefined {
+  const fx: Fit = p.fit?.x ?? "exact";
+  const fy: Fit = p.fit?.y ?? "exact";
+  if ((fx !== "fit" && fy !== "fit") || p.points.length === 0) return undefined;
+  // Units of screen heights, so both axes measure the same.
+  const from = p.aspect ?? aspect;
+  const xs = p.points.map(([x]) => x * from);
+  const ys = p.points.map(([, y]) => y);
+  const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
+  const [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+  // The band's edges sit on the screen's edges.
+  const r = Math.min(p.width / 2, aspect / 2, 0.5);
+  const sx = fx === "fit" && x1 > x0 ? (aspect - 2 * r) / (x1 - x0) : undefined;
+  const sy = fy === "fit" && y1 > y0 ? (1 - 2 * r) / (y1 - y0) : undefined;
+  // Auto follows the other axis's scale, about the shape's middle.
+  const ax = fx === "auto" ? sy : undefined;
+  const ay = fy === "auto" ? sx : undefined;
+  const mx = (x0 + x1) / 2;
+  const cx = (mx / from) * aspect;
+  const cy = (y0 + y1) / 2;
+  const [kx, bx] =
+    sx !== undefined
+      ? [(from * sx) / aspect, (r - x0 * sx) / aspect]
+      : ax !== undefined
+        ? [(from * ax) / aspect, (cx - mx * ax) / aspect]
+        : [1, 0];
+  const [ky, by] =
+    sy !== undefined ? [sy, r - y0 * sy] : ay !== undefined ? [ay, cy * (1 - ay)] : [1, 0];
+  return { kx, bx, ky, by };
+}
+
+/**
+ * The path as placed on a screen `aspect` wide (width over height), after its
+ * fit. The saved path keeps its own shape; this is what's drawn and sampled.
+ */
+export function resolvePath(p: LightPath, aspect: number): LightPath {
+  const m = fitMap(p, aspect);
+  if (!m) return p;
+  return {
+    ...p,
+    points: p.points.map(([x, y]) => [clamp01(x * m.kx + m.bx), clamp01(y * m.ky + m.by)]),
+  };
+}
+
+/**
+ * `edited`, a changed copy of `saved` as placed on a screen `aspect` wide, back
+ * in `saved`'s own terms: the path to save.
+ */
+export function unresolvePath(edited: LightPath, saved: LightPath, aspect: number): LightPath {
+  const m = fitMap(saved, aspect);
+  if (!m) return edited;
+  return {
+    ...edited,
+    aspect: saved.aspect ?? aspect,
+    points: edited.points.map(([x, y]) => [(x - m.bx) / m.kx, (y - m.by) / m.ky]),
+  };
 }

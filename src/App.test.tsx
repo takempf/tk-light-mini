@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api } from "./lib/api";
-import type { AddedDevice } from "./lib/types";
+import type { AddedDevice, LightPath } from "./lib/types";
 import { PAD } from "./lib/view";
 import { DEFAULT_SETTINGS, useScreen, useStore } from "./store";
 
@@ -267,7 +267,7 @@ describe("Canvas", () => {
     width: 0.1,
     closed: true,
   };
-  const selected = (path: typeof square) => {
+  const selected = (path: LightPath) => {
     useStore.setState({
       devices: [light({ sections: [{ count: 1, color: "path", path }] })],
       selection: { id: "A", section: 0 },
@@ -481,5 +481,63 @@ describe("Canvas", () => {
     // The middle of the square, in the viewport.
     expect(tag.style.left).toBe(`${PAD + 100}px`);
     expect(tag.style.top).toBe(`${PAD + 50}px`);
+  });
+
+  it("fits a path to the screen on each axis", () => {
+    const line = {
+      points: [
+        [0.4, 0.4],
+        [0.6, 0.6],
+      ] as [number, number][],
+      width: 0.1,
+      closed: false,
+    };
+    selected(line);
+    render(<App />);
+    const engine = () => lastDevice()?.sections[0]?.path?.points;
+    expect(screen.getByRole("button", { name: "Horizontal: Exact" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Horizontal: Fit" }));
+    // Band edges flush left and right: 0.05 heights in is 0.025 of the width.
+    expect(engine()?.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.025, 0.975]);
+    expect(engine()?.map(([, y]) => y)).toEqual([0.4, 0.6]);
+    expect(screen.queryByText(/Auto follows/)).toBeNull();
+    // Auto scales the height with the width. The line was 40x20px; it stays
+    // twice as wide as it is tall, now 190x95px.
+    fireEvent.click(screen.getByRole("button", { name: "Vertical: Auto" }));
+    const [a, b] = engine() ?? [];
+    expect(((b?.[0] ?? 0) - (a?.[0] ?? 0)) * 200).toBeCloseTo(190);
+    expect(((b?.[1] ?? 0) - (a?.[1] ?? 0)) * 100).toBeCloseTo(95);
+    // The order doesn't matter: Auto first, then Fit, gives the same.
+    fireEvent.click(screen.getByRole("button", { name: "Horizontal: Exact" }));
+    fireEvent.click(screen.getByRole("button", { name: "Horizontal: Fit" }));
+    expect(((engine()?.[1]?.[1] ?? 0) - (engine()?.[0]?.[1] ?? 0)) * 100).toBeCloseTo(95);
+    // Auto next to Exact does nothing, and says so.
+    fireEvent.click(screen.getByRole("button", { name: "Horizontal: Exact" }));
+    expect(screen.getByText(/Auto follows/)).toBeInTheDocument();
+  });
+
+  it("drags a fitted path: free on its exact axis, pinned on its fitted one", () => {
+    selected({
+      points: [
+        [0.3, 0.5],
+        [0.6, 0.5],
+      ],
+      width: 0.1,
+      closed: false,
+      fit: { x: "fit", y: "exact" },
+      aspect: 2,
+    });
+    render(<App />);
+    const svg = layout();
+    // Shown flush left and right, 5px in.
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 50 });
+    fireEvent.pointerMove(svg, { clientX: 130, clientY: 70, altKey: true });
+    fireEvent.pointerUp(svg);
+    const shown = lastDevice()?.sections[0]?.path?.points;
+    expect(shown?.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.025, 0.975]);
+    expect(shown?.map(([, y]) => Math.round(y * 1000) / 1000)).toEqual([0.7, 0.7]);
   });
 });

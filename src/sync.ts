@@ -1,23 +1,25 @@
 import { api } from "./lib/api";
-import { toEngineConfig, useLive, useScreen, useStore } from "./store";
+import { screenAspect, toEngineConfig, useLive, useScreen, useStore } from "./store";
 
 /**
  * Wire the store to the Rust engine:
- * - push config on every relevant change (deduped)
+ * - push config on every relevant change (deduped), and when the screen's
+ *   shape changes, since fitted paths follow it
  * - only stream preview colors while the window is visible
  * - mirror engine status / colors back into the stores
  */
 export function startSync(): () => void {
   let last = "";
-  const push = (s: ReturnType<typeof useStore.getState>) => {
-    const cfg = toEngineConfig(s);
+  const push = () => {
+    const cfg = toEngineConfig(useStore.getState(), screenAspect());
     const key = JSON.stringify(cfg);
     if (key === last) return;
     last = key;
     api.setConfig(cfg).catch((e) => console.error("set_config", e));
   };
-  push(useStore.getState());
+  push();
   const unsubStore = useStore.subscribe(push);
+  const unsubScreen = useScreen.subscribe(push);
 
   const onVisibility = () => {
     const visible = document.visibilityState === "visible";
@@ -40,6 +42,7 @@ export function startSync(): () => void {
 
   return () => {
     unsubStore();
+    unsubScreen();
     document.removeEventListener("visibilitychange", onVisibility);
     for (const p of unlisten) p.then((fn) => fn()).catch(() => {});
   };

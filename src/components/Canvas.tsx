@@ -10,7 +10,9 @@ import {
   movePoints,
   pointsIn,
   removePoints,
+  resolvePath,
   splitPath,
+  unresolvePath,
 } from "../lib/path";
 import { type Guides, snapMove, snapPoint } from "../lib/snap";
 import type { AddedDevice, LightPath, Rgb, Source } from "../lib/types";
@@ -37,7 +39,10 @@ interface Placed {
   key: string;
   device: AddedDevice;
   section: number;
+  /** As placed on screen, after its fit. */
   path: LightPath;
+  /** As saved: edits map back to this. */
+  saved: LightPath;
   /** Its first segment, in the light. */
   start: number;
   /** One per segment in it. */
@@ -45,7 +50,8 @@ interface Placed {
   label: string;
 }
 
-function placedSections(devices: readonly AddedDevice[]): Placed[] {
+/** Every placed section, fitted to a screen `aspect` wide. */
+function placedSections(devices: readonly AddedDevice[], aspect: number): Placed[] {
   return devices.flatMap((device) => {
     const sections = sectionsOf(device);
     const starts = sectionStarts(sections);
@@ -59,7 +65,8 @@ function placedSections(devices: readonly AddedDevice[]): Placed[] {
           key: `${device.id}-${k}`,
           device,
           section: k,
-          path: s.path,
+          path: resolvePath(s.path, aspect),
+          saved: s.path,
           start,
           sources: sources.slice(start, start + s.count),
           label: sections.length > 1 ? `${name} · ${k + 1}` : name,
@@ -251,8 +258,8 @@ function Toolbar({
 
 type Drag =
   /** Moving the picked points; `grab` is the one under the pointer. */
-  | { kind: "points"; grab: number; indices: number[]; from: Pt; orig: LightPath }
-  | { kind: "move"; from: Pt; orig: LightPath }
+  | { kind: "points"; grab: number; indices: number[]; from: Pt; orig: LightPath; saved: LightPath }
+  | { kind: "move"; from: Pt; orig: LightPath; saved: LightPath }
   /** Picking points in a box, on top of `base`. */
   | { kind: "box"; from: Pt; to: Pt; base: number[] }
   /** Panning; `from` is in page pixels. */
@@ -292,7 +299,7 @@ export function Canvas() {
   /** A handle is being pressed, so its focus isn't from the keyboard. */
   const pressing = useRef(false);
 
-  const placed = placedSections(devices);
+  const placed = placedSections(devices, aspect);
   const current = placed.find(
     (p) => p.device.id === selection?.id && p.section === selection.section,
   );
@@ -301,8 +308,18 @@ export function Canvas() {
     current?.path ??
     (drawing && selection ? { points: [], width: 0.12, closed: false } : undefined);
   const picked = points.filter((i) => i < (editing?.points.length ?? 0));
+  /**
+   * Save an edit made on screen. It maps back into the saved path as it was
+   * when the drag started, so a fitted path doesn't drift as it's dragged.
+   */
   const update = (path: LightPath) => {
-    if (selection) setSectionPath(selection.id, selection.section, path);
+    if (!selection) return;
+    const base = drag?.kind === "points" || drag?.kind === "move" ? drag.saved : current?.saved;
+    setSectionPath(
+      selection.id,
+      selection.section,
+      base ? unresolvePath(path, base, aspect) : path,
+    );
   };
 
   /** Zoom by `factor` at `at` (viewport pixels), or at the middle. */
@@ -490,7 +507,7 @@ export function Canvas() {
     svg.current?.setPointerCapture(e.pointerId);
     if (target) {
       if (target !== current) select({ id: target.device.id, section: target.section });
-      setDrag({ kind: "move", from: p, orig: target.path });
+      setDrag({ kind: "move", from: p, orig: target.path, saved: target.saved });
     } else if (editing) {
       setDrag({ kind: "box", from: p, to: p, base: e.shiftKey ? picked : [] });
     } else {
@@ -594,7 +611,14 @@ export function Canvas() {
     const indices = picked.includes(i) ? picked : [i];
     if (!picked.includes(i)) setPoints([i]);
     svg.current?.setPointerCapture(e.pointerId);
-    setDrag({ kind: "points", grab: i, indices, from: at(e), orig: editing });
+    setDrag({
+      kind: "points",
+      grab: i,
+      indices,
+      from: at(e),
+      orig: editing,
+      saved: current?.saved ?? editing,
+    });
   };
 
   const removePoint = (i: number) => {

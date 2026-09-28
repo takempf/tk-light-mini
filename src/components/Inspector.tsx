@@ -1,10 +1,19 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { sectionStarts, sectionsOf, segmentCount, segmentSources } from "../lib/lights";
-import { edgeLoop, flipPath, linePath, removePoints, reversePath, startAt } from "../lib/path";
-import type { AddedDevice, LightPath, Source } from "../lib/types";
-import { useScreen, useStore } from "../store";
-import { Button, Icon, Input, Switch } from "../ui";
+import {
+  edgeLoop,
+  flipPath,
+  linePath,
+  removePoints,
+  resolvePath,
+  reversePath,
+  startAt,
+  unresolvePath,
+} from "../lib/path";
+import type { AddedDevice, Fit, LightPath, Source } from "../lib/types";
+import { useScreenAspect, useStore } from "../store";
+import { Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
 import { ColorPicker } from "./ColorPicker";
 import { SegmentBar } from "./SegmentBar";
 import { pct, Slider } from "./Slider";
@@ -15,14 +24,56 @@ const DEFAULT_WIDTH = 0.12;
 const shared = (sources: Source[]) =>
   sources.every((s) => s === sources[0]) ? sources[0] : undefined;
 
+const FITS: { value: Fit; label: string }[] = [
+  { value: "exact", label: "Exact" },
+  { value: "fit", label: "Fit" },
+  { value: "auto", label: "Auto" },
+];
+
+/** How a path sizes to the screen on one axis. */
+function FitRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: Fit;
+  onChange: (f: Fit) => void;
+}) {
+  return (
+    <div className="fit-row">
+      <span className="meta">{label}</span>
+      <ToggleGroup
+        size="sm"
+        aria-label={`${label} fit`}
+        value={[value]}
+        onValueChange={(v: string[]) => v[0] && onChange(v[0] as Fit)}
+      >
+        {FITS.map((f) => (
+          <Toggle key={f.value} value={f.value} aria-label={`${label}: ${f.label}`}>
+            {f.label}
+          </Toggle>
+        ))}
+      </ToggleGroup>
+    </div>
+  );
+}
+
 /** Where a section is on screen, and the tools to place it. */
 function Placement({ device, section }: { device: AddedDevice; section: number }) {
   const setPath = useStore((s) => s.setSectionPath);
   const drawing = useStore((s) => s.drawing);
   const setDrawing = useStore((s) => s.setDrawing);
-  const image = useScreen((s) => s.image);
-  const aspect = image ? image.width / image.height : 16 / 9;
+  const aspect = useScreenAspect();
+  // Settings change the saved path; point edits happen on the fitted one,
+  // which is what's on screen, and map back.
   const path = sectionsOf(device)[section]?.path;
+  const shown = path && resolvePath(path, aspect);
+  const fit = path?.fit ?? { x: "exact", y: "exact" };
+  const setFit = (axis: "x" | "y", f: Fit) =>
+    path && place({ ...path, fit: { ...fit, [axis]: f } });
+  // Auto follows the other side, so it needs that side on Fit.
+  const idle = (fit.x === "auto" && fit.y !== "fit") || (fit.y === "auto" && fit.x !== "fit");
   const width = path?.width ?? DEFAULT_WIDTH;
   const place = (p: LightPath | undefined) => {
     setDrawing(false);
@@ -63,6 +114,9 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
           >
             Closed loop
           </Switch>
+          <FitRow label="Horizontal" value={fit.x} onChange={(f) => setFit("x", f)} />
+          <FitRow label="Vertical" value={fit.y} onChange={(f) => setFit("y", f)} />
+          {idle && <p className="meta">Auto follows the other side once it's set to Fit.</p>}
           <Slider
             label="Thickness"
             value={path.width}
@@ -90,7 +144,9 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
               Remove from screen
             </Button>
           </div>
-          <PickedPoints path={path} onChange={place} />
+          {shown && (
+            <PickedPoints path={shown} onChange={(p) => place(unresolvePath(p, path, aspect))} />
+          )}
         </>
       )}
     </div>

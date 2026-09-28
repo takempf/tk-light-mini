@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
-import type { GoveeDevice } from "./lib/types";
+import { resolvePath } from "./lib/path";
+import type { GoveeDevice, LightPath } from "./lib/types";
 import { DEFAULT_SETTINGS, migrate, toEngineConfig, useStore } from "./store";
 
 vi.mock("./lib/api", async () => (await import("./test/mockApi")).mockApiModule());
@@ -190,6 +191,8 @@ describe("settings", () => {
     expect(useStore.getState().settings.tuning).toEqual(DEFAULT_SETTINGS.tuning);
   });
 
+  const saved = () => useStore.getState().devices[0]?.sections[0]?.path as LightPath;
+
   it("maps to the engine config shape", () => {
     useStore.getState().addDevice(lamp);
     useStore.getState().setEnabled(true);
@@ -204,10 +207,30 @@ describe("settings", () => {
           brightness: 1,
           razer: false,
           segments: ["path"],
-          sections: [{ path: useStore.getState().devices[0]?.sections[0]?.path, count: 1 }],
+          sections: [{ path: resolvePath(saved(), 16 / 9), count: 1 }],
         },
       ],
     });
+  });
+});
+
+describe("fit", () => {
+  it("sends paths fitted to the screen's shape", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setSectionPath(strip.id, 0, {
+      points: [
+        [0.4, 0.5],
+        [0.6, 0.5],
+      ],
+      width: 0.2,
+      closed: false,
+      fit: { x: "fit", y: "exact" },
+    });
+    // On a 2:1 screen the band's ends sit 0.1 heights in: 0.05 of the width.
+    const path = toEngineConfig(useStore.getState(), 2).devices[0]?.sections[0]?.path;
+    expect(path?.points.map(([x]) => Math.round(x * 1000) / 1000)).toEqual([0.05, 0.95]);
+    expect(path?.points.map(([, y]) => y)).toEqual([0.5, 0.5]);
   });
 });
 

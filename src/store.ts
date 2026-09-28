@@ -8,7 +8,7 @@ import {
   segmentSources,
   splitSection,
 } from "./lib/lights";
-import { edgeLoop, type OldZone, zonePath } from "./lib/path";
+import { edgeLoop, type OldZone, resolvePath, zonePath } from "./lib/path";
 import type {
   AddedDevice,
   EngineConfig,
@@ -115,11 +115,15 @@ const UNDO_MERGE_MS = 1000;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** The screen's shape, from the latest frame. */
-const aspect = () => {
+/** The screen's width over height, from the latest frame. 16:9 until one arrives. */
+export const screenAspect = () => {
   const img = useScreen.getState().image;
   return img ? img.width / img.height : 16 / 9;
 };
+
+/** `screenAspect`, re-rendering when it changes. */
+export const useScreenAspect = () =>
+  useScreen((s) => (s.image ? s.image.width / s.image.height : 16 / 9));
 
 export const useStore = create<AppState>()(
   persist(
@@ -217,7 +221,7 @@ export const useStore = create<AppState>()(
                       on: true,
                       brightness: 1,
                       razer: false,
-                      sections: [{ count: 1, color: "path", path: edgeLoop(aspect(), 0.12) }],
+                      sections: [{ count: 1, color: "path", path: edgeLoop(screenAspect(), 0.12) }],
                     },
                   ],
                   selection: { id: d.id, section: 0 },
@@ -280,8 +284,10 @@ export const useStore = create<AppState>()(
         },
         setSectionPath: (id, section, path) => {
           if (!get().drawing) record(`path:${id}:${section}`);
+          // A fitted path remembers the screen's shape, to keep its proportions.
+          const saved = path?.fit && !path.aspect ? { ...path, aspect: screenAspect() } : path;
           editSections(id, (sections) =>
-            sections.map((s, k) => (k === section ? { ...s, path } : s)),
+            sections.map((s, k) => (k === section ? { ...s, path: saved } : s)),
           );
         },
         splitSection: (id, section, at) => {
@@ -426,8 +432,10 @@ export const useLive = create<{ paths: Record<string, Rgb[]> }>(() => ({ paths: 
  */
 export const useScreen = create<{ image: ScreenImage | null }>(() => ({ image: null }));
 
+/** What the engine needs, with paths fitted to a screen `aspect` wide. */
 export function toEngineConfig(
   s: Pick<AppState, "enabled" | "settings" | "devices">,
+  aspect = 16 / 9,
 ): EngineConfig {
   return {
     enabled: s.enabled,
@@ -448,7 +456,8 @@ export function toEngineConfig(
           sections: sections.map((sec, k) => {
             const start = starts[k] as number;
             const used = segments.slice(start, start + sec.count).includes("path");
-            return { path: used ? (sec.path ?? null) : null, count: sec.count };
+            const path = used && sec.path ? resolvePath(sec.path, aspect) : null;
+            return { path, count: sec.count };
           }),
         };
       }),

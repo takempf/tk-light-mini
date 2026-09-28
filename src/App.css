@@ -564,6 +564,12 @@ body {
   border-radius: 50%;
 }
 
+.fit-row {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  align-items: center;
+  gap: var(--tk-space-2);
+}
 .picked {
   gap: var(--tk-space-2);
 }

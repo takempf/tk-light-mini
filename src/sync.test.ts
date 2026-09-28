@@ -24,6 +24,22 @@ describe("startSync", () => {
     stop();
   });
 
+  it("pushes again when the screen changes shape", () => {
+    const stop = startSync();
+    const calls = () => vi.mocked(api.setConfig).mock.calls.length;
+    const before = calls();
+    // Same config: a new frame alone sends nothing.
+    useScreen.setState({ image: { width: 16, height: 9, rgb: new Uint8Array(16 * 9 * 3) } });
+    expect(calls()).toBe(before);
+    useStore.getState().addDevice({ id: "A", ip: "10.0.0.2", sku: "X" });
+    const withLight = calls();
+    // A new shape moves the fitted edge loop.
+    useScreen.setState({ image: { width: 21, height: 9, rgb: new Uint8Array(21 * 9 * 3) } });
+    expect(calls()).toBe(withLight + 1);
+    useScreen.setState({ image: null });
+    stop();
+  });
+
   it("mirrors engine events into stores", async () => {
     const stop = startSync();
     await vi.waitFor(() => expect(listeners.paths).toBeDefined());

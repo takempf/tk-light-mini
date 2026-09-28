@@ -9,9 +9,11 @@ import {
   movePoints,
   pointsIn,
   removePoints,
+  resolvePath,
   reversePath,
   splitPath,
   startAt,
+  unresolvePath,
   zonePath,
 } from "./path";
 
@@ -221,5 +223,84 @@ describe("labelPoint", () => {
     expect(labelPoint(l, true)).toEqual([5, 15]);
     expect(labelPoint([[3, 4]], false)).toEqual([3, 4]);
     expect(labelPoint([], false)).toBeUndefined();
+  });
+});
+
+describe("resolvePath", () => {
+  // A 2:1 screen. A diagonal band 0.1 thick: its edges are 0.05 screen heights out.
+  const diag = {
+    points: [
+      [0.3, 0.4],
+      [0.5, 0.6],
+    ] as [number, number][],
+    width: 0.1,
+    closed: false,
+  };
+  const at = (p: ReturnType<typeof resolvePath>, i: number) =>
+    p.points[i]?.map((v) => Math.round(v * 1000) / 1000);
+
+  it("leaves exact paths alone", () => {
+    expect(resolvePath(diag, 2)).toBe(diag);
+    // Auto with nothing to follow is exact too.
+    const auto = { ...diag, fit: { x: "exact", y: "auto" } as const };
+    expect(resolvePath(auto, 2)).toBe(auto);
+  });
+
+  it("fills an axis, band edges flush with the screen", () => {
+    const p = resolvePath({ ...diag, fit: { x: "fit", y: "exact" } }, 2);
+    // 0.05 heights in from each side is 0.025 of the width.
+    expect(at(p, 0)).toEqual([0.025, 0.4]);
+    expect(at(p, 1)).toEqual([0.975, 0.6]);
+  });
+
+  it("scales the other axis with it on auto, about the middle", () => {
+    const p = resolvePath({ ...diag, fit: { x: "fit", y: "auto" } }, 2);
+    // Width 0.4 heights becomes 1.9: 4.75 times. The height 0.2 becomes 0.95.
+    expect(at(p, 0)).toEqual([0.025, 0.025]);
+    expect(at(p, 1)).toEqual([0.975, 0.975]);
+  });
+
+  it("fits both ways on its own", () => {
+    const p = resolvePath({ ...diag, fit: { x: "fit", y: "fit" } }, 2);
+    expect(at(p, 0)).toEqual([0.025, 0.05]);
+    expect(at(p, 1)).toEqual([0.975, 0.95]);
+  });
+
+  it("keeps proportions on a screen of another shape", () => {
+    // A square placed on a 2:1 screen: its height fits, its width follows.
+    const square = {
+      points: [
+        [0.25, 0],
+        [0.75, 1],
+      ] as [number, number][],
+      width: 0,
+      closed: false,
+      aspect: 2,
+      fit: { x: "auto", y: "fit" } as const,
+    };
+    // On a 4:1 screen it stays square: one height wide, a quarter of the width.
+    const p = resolvePath(square, 4);
+    expect(at(p, 0)).toEqual([0.375, 0]);
+    expect(at(p, 1)).toEqual([0.625, 1]);
+  });
+
+  it("maps an edit on screen back into the saved shape", () => {
+    const saved = { ...diag, fit: { x: "fit", y: "auto" } as const, aspect: 2 };
+    const shown = resolvePath(saved, 2);
+    // Nothing changed: the saved shape comes back.
+    const same = unresolvePath(shown, saved, 2);
+    same.points.forEach(([x, y], i) => {
+      expect(x).toBeCloseTo(saved.points[i]?.[0] as number, 9);
+      expect(y).toBeCloseTo(saved.points[i]?.[1] as number, 9);
+    });
+    // A point added on screen lands where it shows.
+    const more = { ...shown, points: [...shown.points, [0.5, 0.5] as [number, number]] };
+    const back = resolvePath(unresolvePath(more, saved, 2), 2);
+    expect(at(back, 2)).toEqual([0.5, 0.5]);
+  });
+
+  it("leaves exact edits as they are", () => {
+    const edited = { ...diag, points: [[0.1, 0.1]] as [number, number][] };
+    expect(unresolvePath(edited, diag, 2)).toBe(edited);
   });
 });

@@ -8,6 +8,14 @@ export type Hex = `#${string}`;
  */
 export type Source = "path" | Hex;
 
+/**
+ * How a path sizes to its container (the screen, for now) on one axis:
+ * - "exact": where its points are
+ * - "fit": stretched to fill it, band edges flush with its edges
+ * - "auto": scaled with the other axis, keeping the shape's proportions
+ */
+export type Fit = "exact" | "fit" | "auto";
+
 /** A line drawn over the screen that a light samples along. */
 export interface LightPath {
   /** Screen fractions (0..1), from where the strip starts. */
@@ -16,6 +24,13 @@ export interface LightPath {
   width: number;
   /** Joins the last point back to the first. */
   closed: boolean;
+  /** Per axis. Missing = exact. Read the placed shape through `resolvePath`. */
+  fit?: { x: Fit; y: Fit };
+  /**
+   * The screen's width over height when the points were placed, so "auto"
+   * keeps the shape's proportions on a screen of another shape.
+   */
+  aspect?: number;
 }
 
 /**
