@@ -145,6 +145,13 @@ struct ScreenImage {
 
 /// Resend unchanged colors this often, since UDP can drop packets.
 const KEEPALIVE: Duration = Duration::from_secs(1);
+/// Resend "on" this long after the last time. One packet can be dropped or
+/// ignored (H6056 bars stayed off), and a light may be switched off elsewhere,
+/// where color commands alone don't wake it.
+const POWER_RETRY: Duration = Duration::from_secs(1);
+const POWER_KEEPALIVE: Duration = Duration::from_secs(10);
+/// Quick resends before settling into the keepalive.
+const POWER_TRIES: u8 = 3;
 /// Skip sends when no channel moved more than this.
 const MIN_DELTA: u8 = 2;
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
@@ -242,6 +249,9 @@ struct Target {
     streaming: bool,
     last: Option<Rgb>,
     sent_at: Instant,
+    /// When "on" was last sent, and how many times.
+    power_at: Option<Instant>,
+    power_tries: u8,
     path: Option<PathConfig>,
     /// Built on the first frame, and again when the path or sizes change.
     sampler: Option<PathSampler>,
@@ -252,6 +262,21 @@ struct Target {
 }
 
 impl Target {
+    /// Time to send "on": right away, a few quick retries, then now and then.
+    /// Streaming lights get it once, before the stream starts.
+    fn power_due(&self, now: Instant) -> bool {
+        let Some(at) = self.power_at else { return true };
+        if self.razer.is_some() {
+            return false;
+        }
+        let wait = if self.power_tries < POWER_TRIES {
+            POWER_RETRY
+        } else {
+            POWER_KEEPALIVE
+        };
+        now.duration_since(at) >= wait
+    }
+
     /// Path regions: one per segment in razer mode, else one.
     fn path_segments(&self) -> usize {
         self.razer.as_ref().map_or(1, |s| s.len().max(1))
@@ -300,6 +325,8 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
                 streaming: false,
                 last: None,
                 sent_at: Instant::now(),
+                power_at: None,
+                power_tries: 0,
                 path: d.path.clone(),
                 sampler: None,
                 path_target: Vec::new(),
@@ -312,6 +339,8 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
                     t.last = p.last;
                 }
                 t.sent_at = p.sent_at;
+                t.power_at = p.power_at;
+                t.power_tries = p.power_tries;
                 // Keep path colors across edits, so a still screen doesn't go dark.
                 t.path_target = std::mem::take(&mut p.path_target);
                 t.path_smoother = std::mem::take(&mut p.path_smoother);
@@ -430,7 +459,6 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     let mut last_preview = Instant::now() - PREVIEW_INTERVAL;
     let mut last_screen = Instant::now() - SCREEN_INTERVAL;
     let mut screen_dirty = false;
-    let mut turned_on: Vec<SocketAddr> = Vec::new();
     let mut segment_colors: Vec<Rgb> = Vec::new();
 
     emit_status(None);
@@ -453,21 +481,17 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 sender.razer_mode(addr, false);
             }
             if !cfg.enabled {
-                new.iter_mut().for_each(|t| t.streaming = false);
-                turned_on.clear();
+                // Turning sync back on turns the lights on again.
+                for t in &mut new {
+                    t.streaming = false;
+                    t.power_at = None;
+                    t.power_tries = 0;
+                }
             }
             targets = new;
             if cfg.monitor != monitor {
                 monitor = cfg.monitor;
                 capturer = None;
-            }
-            if cfg.enabled {
-                for t in &targets {
-                    if !turned_on.contains(&t.addr) {
-                        sender.turn(t.addr, true);
-                        turned_on.push(t.addr);
-                    }
-                }
             }
         }
         let frame_time = Duration::from_secs_f32(1.0 / cfg.fps.clamp(5, 60) as f32);
@@ -534,6 +558,11 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 }
                 t.last = None;
                 continue;
+            }
+            if t.power_due(tick) {
+                sender.turn(t.addr, true);
+                t.power_at = Some(tick);
+                t.power_tries = t.power_tries.saturating_add(1);
             }
             if let Some(segments) = &t.razer {
                 if !t.streaming {
@@ -788,6 +817,38 @@ mod tests {
         let mut t = build_targets(&razer_cfg(false), &mut []);
         t[0].last = Some([1, 2, 3]);
         assert_eq!(build_targets(&razer_cfg(true), &mut t)[0].last, None);
+    }
+
+    #[test]
+    fn power_on_retries_then_keeps_alive() {
+        let mut t = build_targets(&razer_cfg(false), &mut []).remove(0);
+        let t0 = Instant::now();
+        assert!(t.power_due(t0), "right away");
+        let mut sends = 0;
+        for ms in (0..30_000).step_by(100) {
+            let now = t0 + Duration::from_millis(ms);
+            if t.power_due(now) {
+                t.power_at = Some(now);
+                t.power_tries += 1;
+                sends += 1;
+            }
+        }
+        // 3 in the first 2 s, then every 10 s: at ~12 s and ~22 s.
+        assert_eq!(sends, 5);
+        // Kept across config changes, so edits don't resend.
+        let mut old = vec![t];
+        let again = build_targets(&razer_cfg(false), &mut old);
+        assert_eq!(again[0].power_tries, 5);
+    }
+
+    #[test]
+    fn streaming_lights_get_on_once() {
+        let mut t = build_targets(&razer_cfg(true), &mut []).remove(0);
+        let t0 = Instant::now();
+        assert!(t.power_due(t0));
+        t.power_at = Some(t0);
+        t.power_tries = 1;
+        assert!(!t.power_due(t0 + Duration::from_secs(60)));
     }
 
     #[test]

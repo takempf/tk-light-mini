@@ -13,7 +13,7 @@ It's built to stay out of the way. If you're gaming, it shouldn't cost you frame
 
 Turning sync off leaves the lights on their last color. **Lights off**, next to the switch, stops syncing and switches them off. Turning sync back on turns them on again.
 
-Each light has its own on/off switch. An off light is switched off and left out of syncing until you turn it back on.
+Each light has its own on/off switch. An off light is switched off and left out of syncing until you turn it back on. While syncing, the app keeps its other lights on: one switched off in the Govee app or with its own button comes back on within 10 seconds, so use the switch here instead.
 
 Click a light to open it. Inside you can rename it, pick its color, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). The Tuning sliders adjust brightness, saturation, smoothing (how slowly colors fade), edge depth (how far in from the screen edge to sample) and sample rate.
 
