@@ -4,6 +4,7 @@ import {
   edgeLoop,
   flipPath,
   insertIndex,
+  labelPoint,
   movePath,
   movePoints,
   pointsIn,
@@ -206,5 +207,19 @@ describe("point tools", () => {
       [0.8, 0.8],
     ]);
     expect(pointsIn(square, [0.9, 0.9], [0.5, 0.1])).toEqual([1, 2]);
+  });
+});
+
+describe("labelPoint", () => {
+  it("is halfway along an open path, and in the middle of a loop", () => {
+    const l: [number, number][] = [
+      [0, 0],
+      [10, 0],
+      [10, 30],
+    ];
+    expect(labelPoint(l, false)).toEqual([10, 0 + 10]);
+    expect(labelPoint(l, true)).toEqual([5, 15]);
+    expect(labelPoint([[3, 4]], false)).toEqual([3, 4]);
+    expect(labelPoint([], false)).toBeUndefined();
   });
 });

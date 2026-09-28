@@ -84,3 +84,30 @@ describe("snapMove", () => {
     expect(snapMove(pts, [0.19, 0], { ...base, guides: false }).delta[0]).toBeCloseTo(0.19);
   });
 });
+
+describe("band edges", () => {
+  // A band 10px thick: its edges are 5px either side of its middle.
+  const edge = { ...base, edge: 5 };
+
+  it("puts a band flush inside the screen edge", () => {
+    const r = snapPoint([0.03, 0.3], edge);
+    expect(r.point[0]).toBeCloseTo(5 / 200);
+    expect(r.guides).toEqual({ x: 0 });
+  });
+
+  it("lines up with another band's edge", () => {
+    const r = snapPoint([0.3, 0.36], { ...edge, lines: { y: [0.3] } });
+    expect(r.point[1]).toBeCloseTo(0.35);
+    expect(r.guides).toEqual({ y: 0.3 });
+  });
+
+  it("moves a whole band flush with the edge", () => {
+    const pts: [number, number][] = [
+      [0.2, 0.9],
+      [0.8, 0.9],
+    ];
+    const r = snapMove(pts, [0, 0.04], edge);
+    expect(0.9 + r.delta[1]).toBeCloseTo(0.95);
+    expect(r.guides).toEqual({ y: 1 });
+  });
+});

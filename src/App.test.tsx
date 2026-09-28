@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api } from "./lib/api";
 import type { AddedDevice } from "./lib/types";
-import { DEFAULT_SETTINGS, useStore } from "./store";
+import { PAD } from "./lib/view";
+import { DEFAULT_SETTINGS, useScreen, useStore } from "./store";
 
 vi.mock("./lib/api", async () => (await import("./test/mockApi")).mockApiModule());
 
@@ -161,17 +162,30 @@ describe("App", () => {
 });
 
 describe("Canvas", () => {
-  // jsdom has no layout: make the screen 200x100 on the page.
+  // jsdom has no layout: a 2:1 screen, fitted at 200x100 with room around it.
+  // The viewport sits at -PAD on the page, so the screen spans 0..200 x 0..100.
   const size = (w: number, h: number) => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: w });
     Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, value: h });
   };
-  beforeEach(() => size(200, 100));
-  afterEach(() => size(0, 0));
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  beforeEach(() => {
+    size(200 + 2 * PAD, 100 + 2 * PAD);
+    HTMLCanvasElement.prototype.getContext = () => null; // not in jsdom
+    useScreen.setState({ image: { width: 2, height: 1, rgb: new Uint8Array(6) } });
+  });
+  afterEach(() => {
+    size(0, 0);
+    HTMLCanvasElement.prototype.getContext = getContext;
+    useScreen.setState({ image: null });
+  });
 
   const layout = () => {
     const svg = screen.getByRole("application", { name: "Light layout" });
-    svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 }) as DOMRect;
+    const rect = { left: -PAD, top: -PAD, width: 200 + 2 * PAD, height: 100 + 2 * PAD };
+    svg.getBoundingClientRect = () => rect as DOMRect;
+    const vp = svg.parentElement as HTMLElement;
+    vp.getBoundingClientRect = () => rect as DOMRect;
     svg.setPointerCapture = () => {}; // not in jsdom
     return svg;
   };
@@ -232,7 +246,7 @@ describe("Canvas", () => {
 
     fireEvent.pointerDown(svg, { button: 0, clientX: 40, clientY: 52 });
     expect(useStore.getState().selection).toEqual({ id: "A", section: 0 });
-    fireEvent.pointerMove(svg, { clientX: 50, clientY: 62 });
+    fireEvent.pointerMove(svg, { clientX: 50, clientY: 62, altKey: true });
     fireEvent.pointerUp(svg);
     expect(points()?.[0]?.[0]).toBeCloseTo(0.15);
     expect(points()?.[0]?.[1]).toBeCloseTo(0.6);
@@ -361,7 +375,13 @@ describe("Canvas", () => {
     selected({ ...square, closed: false });
     render(<App />);
     const svg = layout();
-    fireEvent.pointerDown(svg, { button: 0, clientX: 150, clientY: 70, ctrlKey: true });
+    fireEvent.pointerDown(svg, {
+      button: 0,
+      clientX: 150,
+      clientY: 70,
+      ctrlKey: true,
+      altKey: true,
+    });
     expect(points()).toHaveLength(5);
     expect(points()?.[4]).toEqual([0.75, 0.7]);
     expect(picked()).toEqual([4]);
@@ -415,5 +435,51 @@ describe("Canvas", () => {
     expect(picked()).toEqual([0]);
     fireEvent.click(screen.getByRole("button", { name: "Flip ↔" }));
     expect(points()?.[0]?.[0]).toBeCloseTo(0.25);
+  });
+
+  it("zooms at the pointer, pans, and fits", () => {
+    selected(square);
+    const { container } = render(<App />);
+    const left = () => (container.querySelector(".artboard") as HTMLElement).style.left;
+    const svg = layout();
+    const zoom = () => screen.getByRole("button", { name: "Zoom to fit" });
+    expect(zoom()).toHaveTextContent("100%");
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(zoom()).toHaveTextContent("125%");
+    fireEvent.keyDown(window, { key: "0", ctrlKey: true });
+    expect(zoom()).toHaveTextContent("100%");
+
+    // The wheel zooms around the pointer: the spot under it stays put.
+    const vp = svg.parentElement as HTMLElement;
+    fireEvent.wheel(vp, { deltaY: -462, clientX: 40, clientY: 20 });
+    expect(zoom()).toHaveTextContent("200%");
+    fireEvent.pointerDown(handle("Point 1, start"), { button: 0, clientX: 40, clientY: 20 });
+    fireEvent.pointerUp(svg);
+    expect(picked()).toEqual([0]);
+
+    // Space+drag pans instead of editing.
+    const before = Number.parseFloat(left());
+    fireEvent.keyDown(window, { key: " " });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 50 });
+    fireEvent.pointerMove(svg, { clientX: 140, clientY: 50 });
+    fireEvent.pointerUp(svg);
+    fireEvent.keyUp(window, { key: " " });
+    expect(points()).toEqual(square.points);
+    expect(useStore.getState().selection).not.toBeNull();
+    expect(Number.parseFloat(left())).toBeCloseTo(before + 40);
+
+    fireEvent.click(zoom());
+    expect(zoom()).toHaveTextContent("100%");
+  });
+
+  it("names each light in a tag over its middle", () => {
+    selected(square);
+    const { container } = render(<App />);
+    layout();
+    const tag = container.querySelector(".tag") as HTMLElement;
+    expect(tag).toHaveTextContent("Lamp");
+    // The middle of the square, in the viewport.
+    expect(tag.style.left).toBe(`${PAD + 100}px`);
+    expect(tag.style.top).toBe(`${PAD + 50}px`);
   });
 });

@@ -19,7 +19,9 @@ Click a light, in the list or on the screen, to open it. Inside you can rename i
 
 ### Placing lights
 
-The big screen shows every light as a band over a live copy of your screen.
+The big screen shows every light as a band over a live copy of your screen, with its name in a tag.
+
+- **Zoom and pan:** the wheel zooms in and out where the pointer is. Hold **Space** and drag, or drag with the middle button, to pan. The zoom buttons above the screen (or **Ctrl+=**, **Ctrl+−** and **Ctrl+0**) zoom in, out and back to fit.
 
 - **Move:** drag a light's band. Hold **Shift** to move it straight across or straight up and down.
 - **Pick points:** click a point. **Shift**+click adds or removes points, dragging a box on empty space picks the points inside it, and **Ctrl+A** picks them all. **Esc** unpicks.
@@ -28,7 +30,7 @@ The big screen shows every light as a band over a live copy of your screen.
 - **Draw from scratch:** **Draw**, then click out the points. **Backspace** takes back the last one, and clicking the first point closes the loop. Double-click, **Enter** or **Done drawing** finishes.
 - **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place. **Flip** mirrors a path across the middle, handy for a pair of bars.
 - **Thickness** sets how wide a band of the picture the light looks at.
-- Points snap to other points and to the screen's edges and middle, with a guide line. Hold **Shift** while dragging a single point to keep its line at 0, 45 or 90 degrees, and **Alt** to turn snapping off.
+- Points snap to other points and to the screen's edges and middle, with a guide line. A band's edges snap too, so it can sit flush inside the screen's edge or right against another band. Hold **Shift** while dragging a single point to keep its line at 0, 45 or 90 degrees, and **Alt** to turn snapping off.
 - **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Shift+Z**) cover placement, sections and colors. **Shortcuts** above the screen lists all of these.
 
 ### Segments and sections

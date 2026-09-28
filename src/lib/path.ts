@@ -216,3 +216,15 @@ export function insertIndex(path: LightPath, p: Pt, w: number, h: number): numbe
   if (path.points.length < 2) return -1;
   return distanceTo(path, p, w, h) <= 0 ? nearestLeg(path, p, w, h).index : -1;
 }
+
+/**
+ * Where a path's name goes: halfway along an open path, or the middle of a
+ * loop's bounds. Works in whatever units `points` are in.
+ */
+export function labelPoint(points: readonly Pt[], closed: boolean): Pt | undefined {
+  if (points.length === 0) return undefined;
+  if (!closed && points.length > 1) return splitPath(points, false, 2)[1]?.[0];
+  const xs = points.map(([x]) => x);
+  const ys = points.map(([, y]) => y);
+  return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+}

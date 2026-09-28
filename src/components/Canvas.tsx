@@ -5,6 +5,7 @@ import {
   clampPoint,
   distanceTo,
   insertIndex,
+  labelPoint,
   movePath,
   movePoints,
   pointsIn,
@@ -13,6 +14,7 @@ import {
 } from "../lib/path";
 import { type Guides, snapMove, snapPoint } from "../lib/snap";
 import type { AddedDevice, LightPath, Rgb, Source } from "../lib/types";
+import { FIT, frameOf, panBy, type View, zoomAt } from "../lib/view";
 import { useLive, useScreen, useStore } from "../store";
 import { Button, Popover } from "../ui";
 
@@ -27,6 +29,8 @@ const REACH = 4;
 const HANDLE = 6;
 /** A press that moves less than this is a click, in screen pixels. */
 const CLICK = 3;
+/** Zoom per button press or key. */
+const ZOOM_STEP = 1.25;
 
 /** A placed section, ready to draw. */
 interface Placed {
@@ -107,7 +111,7 @@ function ScreenImage() {
 
 const line = (pts: readonly Pt[]) => pts.map((p) => p.join(",")).join(" ");
 
-/** A section's band, in its segments' colors, with its name at the start. */
+/** A section's band, in its segments' colors. */
 function Shape({
   p,
   w,
@@ -130,7 +134,6 @@ function Shape({
     const s = p.sources[i] as Source;
     return s === "path" ? live?.[p.start + i] : hexRgb(s);
   };
-  const [tx, ty] = px[0] ?? [0, 0];
   return (
     <g
       className="shape"
@@ -152,12 +155,23 @@ function Shape({
           strokeWidth={band}
         />
       ))}
-      {px.length > 0 && (
-        <text className="shape-tag" x={tx} y={ty} dy={-band / 2 - 6}>
-          {p.label}
-        </text>
-      )}
     </g>
+  );
+}
+
+/** A section's name, in a small tag over the middle of its shape. */
+function Tag({ p, frame }: { p: Placed; frame: { x: number; y: number; w: number; h: number } }) {
+  const px = p.path.points.map(([x, y]) => [x * frame.w, y * frame.h] as Pt);
+  const at = labelPoint(px, p.path.closed);
+  if (!at) return null;
+  return (
+    <span
+      className="tag"
+      data-off={p.device.on ? undefined : ""}
+      style={{ left: frame.x + at[0], top: frame.y + at[1] }}
+    >
+      {p.label}
+    </span>
   );
 }
 
@@ -175,6 +189,9 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+A", "Pick every point"],
   ["Esc", "Unpick points, then the light"],
   ["Alt", "Hold to turn off snapping"],
+  ["Wheel", "Zoom in or out at the pointer"],
+  ["Space+drag, middle drag", "Pan"],
+  ["Ctrl+=, Ctrl+−, Ctrl+0", "Zoom in, out, fit"],
   ["Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"],
   [
     "While drawing",
@@ -182,8 +199,16 @@ const SHORTCUTS: [string, string][] = [
   ],
 ];
 
-/** Undo, redo, and the list of shortcuts. */
-function Toolbar() {
+/** Undo, redo, zoom, and the list of shortcuts. */
+function Toolbar({
+  zoom,
+  onZoom,
+  onFit,
+}: {
+  zoom: number;
+  onZoom: (factor: number) => void;
+  onFit: () => void;
+}) {
   const canUndo = useStore((s) => s.past.length > 0 && !s.drawing);
   const canRedo = useStore((s) => s.future.length > 0 && !s.drawing);
   const undo = useStore((s) => s.undo);
@@ -195,6 +220,16 @@ function Toolbar() {
       </Button>
       <Button variant="ghost" size="sm" disabled={!canRedo} onClick={redo}>
         Redo
+      </Button>
+      <span className="canvas-bar-gap" />
+      <Button variant="ghost" size="sm" aria-label="Zoom out" onClick={() => onZoom(1 / ZOOM_STEP)}>
+        −
+      </Button>
+      <Button variant="ghost" size="sm" aria-label="Zoom to fit" onClick={onFit}>
+        {Math.round(zoom * 100)}%
+      </Button>
+      <Button variant="ghost" size="sm" aria-label="Zoom in" onClick={() => onZoom(ZOOM_STEP)}>
+        +
       </Button>
       <Popover.Root>
         <Popover.Trigger render={<Button variant="ghost" size="sm" />}>Shortcuts</Popover.Trigger>
@@ -219,7 +254,9 @@ type Drag =
   | { kind: "points"; grab: number; indices: number[]; from: Pt; orig: LightPath }
   | { kind: "move"; from: Pt; orig: LightPath }
   /** Picking points in a box, on top of `base`. */
-  | { kind: "box"; from: Pt; to: Pt; base: number[] };
+  | { kind: "box"; from: Pt; to: Pt; base: number[] }
+  /** Panning; `from` is in page pixels. */
+  | { kind: "pan"; from: Pt; orig: View };
 
 /**
  * The screen, with every placed light section on it. Click a band to select
@@ -238,9 +275,16 @@ export function Canvas() {
   const undo = useStore((s) => s.undo);
   const redo = useStore((s) => s.redo);
   const image = useScreen((s) => s.image) ?? FALLBACK;
-  const box = useRef<HTMLDivElement>(null);
+  const aspect = image.width / image.height;
+  const vp = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
-  const { w, h } = useSize(box);
+  const { w: vw, h: vh } = useSize(vp);
+  const [view, setView] = useState<View>(FIT);
+  // The artboard: the screen's place in the viewport. `w`x`h` is its size.
+  const frame = frameOf(view, vw, vh, aspect);
+  const { w, h } = frame;
+  /** Space is held: drags pan. */
+  const [space, setSpace] = useState(false);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [guides, setGuides] = useState<Guides>({});
   const [cursor, setCursor] = useState<Pt | null>(null);
@@ -261,16 +305,40 @@ export function Canvas() {
     if (selection) setSectionPath(selection.id, selection.section, path);
   };
 
-  // Latest values for the window key handler.
-  const live = useRef({ editing, picked, drawing, update, w, h });
-  live.current = { editing, picked, drawing, update, w, h };
+  /** Zoom by `factor` at `at` (viewport pixels), or at the middle. */
+  const zoom = (factor: number, at: Pt = [vw / 2, vh / 2]) =>
+    setView((v) => zoomAt(v, factor, at, vw, vh, aspect));
+
+  // Latest values for the window and wheel handlers.
+  const live = useRef({ editing, picked, drawing, update, w, h, zoom });
+  live.current = { editing, picked, drawing, update, w, h, zoom };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e.target)) return;
-      const { editing, picked, drawing, update, w, h } = live.current;
+      const { editing, picked, drawing, update, w, h, zoom } = live.current;
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
+      if (e.key === " ") {
+        e.preventDefault();
+        setSpace(true);
+        return;
+      }
+      if (ctrl && (key === "=" || key === "+")) {
+        e.preventDefault();
+        zoom(ZOOM_STEP);
+        return;
+      }
+      if (ctrl && key === "-") {
+        e.preventDefault();
+        zoom(1 / ZOOM_STEP);
+        return;
+      }
+      if (ctrl && key === "0") {
+        e.preventDefault();
+        setView(FIT);
+        return;
+      }
       if (drawing) {
         if (e.key === "Enter" || e.key === "Escape") {
           setDrawing(false);
@@ -316,25 +384,69 @@ export function Canvas() {
         update(movePoints(editing, picked, d[e.key] ?? [0, 0]));
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " ") setSpace(false);
+    };
+    const onBlur = () => setSpace(false);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [setDrawing, setPoints, select, breakUndo, undo, redo]);
 
+  // The wheel zooms at the pointer. Not passive, so the page doesn't scroll.
+  useEffect(() => {
+    const el = vp.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const lines = e.deltaMode === 1 ? 16 : 1;
+      live.current.zoom(Math.exp(-e.deltaY * lines * 0.0015), [
+        e.clientX - r.left,
+        e.clientY - r.top,
+      ]);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  /** The screen spot under the pointer, in fractions. */
   const at = (e: React.PointerEvent | React.MouseEvent): Pt => {
     const r = (svg.current as SVGSVGElement).getBoundingClientRect();
-    return clampPoint([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
+    return clampPoint([(e.clientX - r.left - frame.x) / w, (e.clientY - r.top - frame.y) / h]);
   };
   /** Every point on screen but `skip` of the edited path, to snap to. */
   const targets = (skip: readonly number[]): Pt[] => [
     ...placed.filter((p) => p !== current).flatMap((p) => p.path.points),
     ...(editing?.points.filter((_, i) => !skip.includes(i)) ?? []),
   ];
+  /** Other bands' edges, to line up with. */
+  const others = placed.filter((p) => p !== current);
+  const lines = {
+    x: others.flatMap((p) => {
+      const r = (p.path.width * h) / 2 / w;
+      return p.path.points.flatMap(([x]) => [x - r, x + r]);
+    }),
+    y: others.flatMap((p) => {
+      const r = p.path.width / 2;
+      return p.path.points.flatMap(([, y]) => [y - r, y + r]);
+    }),
+  };
+  /** Half the edited band's thickness, in pixels: its edges snap too. */
+  const edge = ((editing?.width ?? 0) * h) / 2;
   const snap = (e: React.PointerEvent, from: Pt | undefined, skip: readonly number[]) => {
     const r = snapPoint(at(e), {
       from,
       shift: e.shiftKey,
       guides: !e.altKey,
       targets: targets(skip),
+      lines,
+      edge,
       w,
       h,
       tol: SNAP,
@@ -354,6 +466,13 @@ export function Canvas() {
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    // Middle button or Space: pan.
+    if (e.button === 1 || (e.button === 0 && space)) {
+      e.preventDefault();
+      svg.current?.setPointerCapture(e.pointerId);
+      setDrag({ kind: "pan", from: [e.clientX, e.clientY], orig: view });
+      return;
+    }
     if (e.button !== 0) return;
     const pts = editing?.points ?? [];
     if (drawing && editing) {
@@ -380,6 +499,11 @@ export function Canvas() {
   };
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (drag?.kind === "pan") {
+      const d: Pt = [e.clientX - drag.from[0], e.clientY - drag.from[1]];
+      setView(panBy(drag.orig, d, frameOf(drag.orig, vw, vh, aspect)));
+      return;
+    }
     if (drawing && editing) {
       const pts = editing.points;
       setCursor(snap(e, pts[pts.length - 1], []));
@@ -403,17 +527,27 @@ export function Canvas() {
         const r = snapMove(
           drag.orig.points.filter((_, i) => drag.indices.includes(i)),
           delta,
-          { shift: e.shiftKey, guides: !e.altKey, targets: targets(drag.indices), w, h, tol: SNAP },
+          {
+            shift: e.shiftKey,
+            guides: !e.altKey,
+            targets: targets(drag.indices),
+            lines,
+            edge,
+            w,
+            h,
+            tol: SNAP,
+          },
         );
         setGuides(r.guides);
         update(movePoints(drag.orig, drag.indices, r.delta));
       }
     } else {
-      const others = placed.filter((x) => x !== current).flatMap((x) => x.path.points);
       const r = snapMove(drag.orig.points, delta, {
         shift: e.shiftKey,
         guides: !e.altKey,
-        targets: others,
+        targets: others.flatMap((x) => x.path.points),
+        lines,
+        edge: (drag.orig.width * h) / 2,
         w,
         h,
         tol: SNAP,
@@ -441,7 +575,8 @@ export function Canvas() {
 
   const onHandleDown = (i: number, e: React.PointerEvent) => {
     pressing.current = true;
-    if (e.button !== 0 || !editing) return;
+    // Let pans through to the viewport.
+    if (e.button !== 0 || space || !editing) return;
     e.stopPropagation();
     if (drawing) {
       // Clicking the first point closes the loop.
@@ -483,67 +618,64 @@ export function Canvas() {
           height: Math.abs(drag.to[1] - drag.from[1]) * h,
         }
       : null;
-  const pointer = drawing
-    ? "draw"
-    : drag?.kind === "move" || drag?.kind === "points"
-      ? "grabbing"
-      : hover
-        ? "move"
-        : undefined;
+  const pointer =
+    drag?.kind === "pan"
+      ? "panning"
+      : space
+        ? "pan"
+        : drawing
+          ? "draw"
+          : drag?.kind === "move" || drag?.kind === "points"
+            ? "grabbing"
+            : hover
+              ? "move"
+              : undefined;
 
   return (
     <section className="canvas" aria-label="Screen">
-      <Toolbar />
-      <div className="canvas-fit">
-        <div
-          ref={box}
-          className="canvas-box"
-          style={
-            {
-              aspectRatio: `${image.width} / ${image.height}`,
-              "--aspect": image.width / image.height,
-            } as React.CSSProperties
-          }
-          data-pointer={pointer}
-        >
+      <Toolbar zoom={view.zoom} onZoom={(f) => zoom(f)} onFit={() => setView(FIT)} />
+      <div ref={vp} className="viewport" data-pointer={pointer}>
+        <div className="artboard" style={{ left: frame.x, top: frame.y, width: w, height: h }}>
           <ScreenImage />
-          <svg
-            ref={svg}
-            width={w}
-            height={h}
-            role="application"
-            aria-label="Light layout"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
-            onPointerLeave={() => {
-              if (drawing) setCursor(null);
-              setHover(null);
-            }}
-            onDoubleClick={(e) => {
-              if (!editing) return;
-              if (drawing) {
-                // The double-click's second press added a point on top of the first.
-                const [a, b] = editing.points.slice(-2);
-                const dup = a && b && Math.hypot((a[0] - b[0]) * w, (a[1] - b[1]) * h) < CLICK;
-                if (dup) update({ ...editing, points: editing.points.slice(0, -1) });
-                setDrawing(false);
-                setCursor(null);
-                return;
-              }
-              const p = at(e);
-              const i = insertIndex(editing, p, w, h);
-              if (i >= 0) {
-                breakUndo();
-                update({
-                  ...editing,
-                  points: [...editing.points.slice(0, i), p, ...editing.points.slice(i)],
-                });
-                setPoints([i]);
-              }
-            }}
-          >
+        </div>
+        <svg
+          ref={svg}
+          width={vw}
+          height={vh}
+          role="application"
+          aria-label="Light layout"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onPointerLeave={() => {
+            if (drawing) setCursor(null);
+            setHover(null);
+          }}
+          onDoubleClick={(e) => {
+            if (!editing) return;
+            if (drawing) {
+              // The double-click's second press added a point on top of the first.
+              const [a, b] = editing.points.slice(-2);
+              const dup = a && b && Math.hypot((a[0] - b[0]) * w, (a[1] - b[1]) * h) < CLICK;
+              if (dup) update({ ...editing, points: editing.points.slice(0, -1) });
+              setDrawing(false);
+              setCursor(null);
+              return;
+            }
+            const p = at(e);
+            const i = insertIndex(editing, p, w, h);
+            if (i >= 0) {
+              breakUndo();
+              update({
+                ...editing,
+                points: [...editing.points.slice(0, i), p, ...editing.points.slice(i)],
+              });
+              setPoints([i]);
+            }
+          }}
+        >
+          <g transform={`translate(${frame.x} ${frame.y})`}>
             {placed.map((p) => (
               <Shape
                 key={p.key}
@@ -555,10 +687,22 @@ export function Canvas() {
               />
             ))}
             {guides.x !== undefined && (
-              <line className="guide" x1={guides.x * w} x2={guides.x * w} y1={0} y2={h} />
+              <line
+                className="guide"
+                x1={guides.x * w}
+                x2={guides.x * w}
+                y1={-frame.y}
+                y2={vh - frame.y}
+              />
             )}
             {guides.y !== undefined && (
-              <line className="guide" x1={0} x2={w} y1={guides.y * h} y2={guides.y * h} />
+              <line
+                className="guide"
+                x1={-frame.x}
+                x2={vw - frame.x}
+                y1={guides.y * h}
+                y2={guides.y * h}
+              />
             )}
             {editing && (
               <g className="editor">
@@ -623,7 +767,12 @@ export function Canvas() {
               </g>
             )}
             {boxRect && <rect className="marquee" {...boxRect} />}
-          </svg>
+          </g>
+        </svg>
+        <div className="tags" aria-hidden>
+          {placed.map((p) => (
+            <Tag key={p.key} p={p} frame={frame} />
+          ))}
         </div>
       </div>
       <p className="canvas-hint meta">
