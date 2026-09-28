@@ -8,8 +8,29 @@ export type Rgb = [number, number, number];
 /** Live colors in `ZONES` order. */
 export type ZoneColors = Rgb[];
 
-/** Where a light or segment gets its color: a live zone, or a fixed "#rrggbb". */
-export type Source = Zone | `#${string}`;
+/**
+ * Where a light or segment gets its color: a live zone, the light's own path
+ * ("path": segment i takes region i), or a fixed "#rrggbb".
+ */
+export type Source = Zone | "path" | `#${string}`;
+
+/** A line drawn over the screen that a light samples along. */
+export interface LightPath {
+  /** Screen fractions (0..1), from where the strip starts. */
+  points: [number, number][];
+  /** Thickness, as a fraction of the screen height. */
+  width: number;
+  /** Joins the last point back to the first. */
+  closed: boolean;
+}
+
+/** The small frame the engine samples. */
+export interface ScreenImage {
+  width: number;
+  height: number;
+  /** RGB, row by row. */
+  rgb: Uint8Array;
+}
 
 export interface GoveeDevice {
   id: string;
@@ -31,6 +52,8 @@ export interface AddedDevice extends GoveeDevice {
   segments?: number;
   /** Per-segment colors in razer mode. Missing or null = the light's color. */
   segmentColors?: (Source | null)[];
+  /** Where the "path" color samples. */
+  path?: LightPath;
 }
 
 /** Segment counts measured on real lights. */
@@ -70,5 +93,12 @@ export interface EngineConfig {
   monitor: number;
   tuning: Tuning;
   /** `segments` has one source per segment in razer mode, else is empty. */
-  devices: { ip: string; color: Source; brightness: number; razer: boolean; segments: Source[] }[];
+  devices: {
+    ip: string;
+    color: Source;
+    brightness: number;
+    razer: boolean;
+    segments: Source[];
+    path: LightPath | null;
+  }[];
 }

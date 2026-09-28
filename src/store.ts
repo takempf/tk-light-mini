@@ -7,7 +7,10 @@ import {
   type EngineConfig,
   type EngineStatus,
   type GoveeDevice,
+  type LightPath,
   type MonitorInfo,
+  type Rgb,
+  type ScreenImage,
   type Settings,
   type Source,
   type Tuning,
@@ -44,6 +47,11 @@ interface AppState {
   setPower: (id: string, on: boolean) => void;
   setRazer: (id: string, on: boolean) => void;
   setSegments: (id: string, segments: number) => void;
+  /**
+   * Set or clear a light's path. A new path becomes the light's color; clearing
+   * it drops "path" colors.
+   */
+  setPath: (id: string, path: LightPath | undefined) => void;
   setEnabled: (on: boolean) => void;
   /** Stop syncing and switch every light off. */
   lightsOff: () => Promise<void>;
@@ -136,6 +144,19 @@ export const useStore = create<AppState>()(
       },
       setRazer: (id, razer) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, razer } : d)) })),
+      setPath: (id, path) =>
+        set((s) => ({
+          devices: s.devices.map((d) => {
+            if (d.id !== id) return d;
+            if (path) return { ...d, path, color: d.path ? d.color : "path" };
+            return {
+              ...d,
+              path: undefined,
+              color: d.color === "path" ? "all" : d.color,
+              segmentColors: d.segmentColors?.map((c) => (c === "path" ? null : c)),
+            };
+          }),
+        })),
       setSegments: (id, segments) =>
         set((s) => ({ devices: s.devices.map((d) => (d.id === id ? { ...d, segments } : d)) })),
       setEnabled: (enabled) => set({ enabled }),
@@ -191,7 +212,14 @@ export const segmentSources = (d: AddedDevice): Source[] =>
   Array.from({ length: segmentCount(d) }, (_, i) => d.segmentColors?.[i] ?? d.color);
 
 /** Live zone colors, split out so 10 Hz updates only re-render the preview. */
-export const useZoneColors = create<{ colors: ZoneColors | null }>(() => ({ colors: null }));
+export const useZoneColors = create<{
+  colors: ZoneColors | null;
+  /** Live path colors by light IP, one per path segment. */
+  paths: Record<string, Rgb[]>;
+}>(() => ({ colors: null, paths: {} }));
+
+/** The engine's small screen frame, while a path editor wants it. */
+export const useScreen = create<{ image: ScreenImage | null }>(() => ({ image: null }));
 
 export function toEngineConfig(
   s: Pick<AppState, "enabled" | "settings" | "devices">,
@@ -209,6 +237,7 @@ export function toEngineConfig(
         brightness: d.brightness,
         razer: d.razer,
         segments: d.razer ? segmentSources(d) : [],
+        path: d.path ?? null,
       })),
   };
 }

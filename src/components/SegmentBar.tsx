@@ -5,16 +5,18 @@ import { css, useSourceColor } from "./ZonePreview";
 
 function Cell({
   index,
+  ip,
   source,
   selected,
   onClick,
 }: {
   index: number;
+  ip: string;
   source: Source;
   selected: boolean;
   onClick: (e: React.MouseEvent) => void;
 }) {
-  const color = useSourceColor(source);
+  const color = useSourceColor(source, ip, index);
   return (
     <button
       type="button"
@@ -33,11 +35,14 @@ function Cell({
  */
 export function SegmentBar({
   label,
+  ip,
   sources,
   selected,
   onSelect,
 }: {
   label: string;
+  /** The light's IP, for live path colors. */
+  ip: string;
   sources: readonly Source[];
   selected: ReadonlySet<number>;
   onSelect: (s: Set<number>) => void;
@@ -64,6 +69,7 @@ export function SegmentBar({
             // biome-ignore lint/suspicious/noArrayIndexKey: segments are positions
             key={i}
             index={i}
+            ip={ip}
             source={s}
             selected={selected.has(i)}
             onClick={(e) => click(i, e)}

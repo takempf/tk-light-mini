@@ -30,9 +30,12 @@ describe("startSync", () => {
     const c: Rgb = [1, 2, 3];
     listeners.zones?.([c, c, c, c, c]);
     expect(useZoneColors.getState().colors?.[0]).toEqual(c);
+    listeners.paths?.([{ ip: "10.0.0.2", colors: [c, c] }]);
+    expect(useZoneColors.getState().paths["10.0.0.2"]).toEqual([c, c]);
     listeners.status?.({ running: false, error: "boom" });
     expect(useStore.getState().status.error).toBe("boom");
     expect(useZoneColors.getState().colors).toBeNull();
+    expect(useZoneColors.getState().paths).toEqual({});
     stop();
   });
 

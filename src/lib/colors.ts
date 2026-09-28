@@ -20,6 +20,7 @@ export const PALETTES: readonly Palette[] = [
       { source: "left", label: "Left" },
       { source: "center", label: "Center" },
       { source: "all", label: "Average" },
+      { source: "path", label: "Path" },
     ],
   },
   {
@@ -38,7 +39,14 @@ export const PALETTES: readonly Palette[] = [
   },
 ];
 
-export const isLive = (s: Source): s is Zone => !s.startsWith("#");
+/** Follows the screen: a zone or the path. */
+export const isLive = (s: Source): s is Zone | "path" => !s.startsWith("#");
+
+/** Palettes for a light. "Path" only once it has one. */
+export const palettesFor = (hasPath: boolean): readonly Palette[] =>
+  hasPath
+    ? PALETTES
+    : PALETTES.map((p) => ({ ...p, swatches: p.swatches.filter((s) => s.source !== "path") }));
 
 const LABELS = new Map(PALETTES.flatMap((p) => p.swatches.map((s) => [s.source, s.label])));
 

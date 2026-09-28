@@ -5,6 +5,7 @@ import type { AddedDevice, GoveeDevice, Rgb, Source } from "../lib/types";
 import { segmentSources, useStore } from "../store";
 import { Accordion, Button, Eyebrow, Input, Panel, Switch } from "../ui";
 import { ColorPicker } from "./ColorPicker";
+import { PathEditor } from "./PathEditor";
 import { SegmentBar } from "./SegmentBar";
 import { pct, Slider } from "./Slider";
 import { css, useSourceColor } from "./ZonePreview";
@@ -22,11 +23,12 @@ function LightRow({ device }: { device: AddedDevice }) {
   const setRazer = useStore((s) => s.setRazer);
   const setSegments = useStore((s) => s.setSegments);
   const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [editing, setEditing] = useState(false);
   const name = device.name || device.sku;
   const sources = device.razer ? segmentSources(device) : [];
   const selected = [...picked].filter((i) => i < sources.length).sort((a, b) => a - b);
   const mixed = sources.some((s) => s !== device.color);
-  const color = useSourceColor(device.color);
+  const color = useSourceColor(device.color, device.ip);
   const dot = device.on
     ? (color?.map((v) => Math.min(255, Math.round(v * device.brightness))) as Rgb | undefined)
     : undefined;
@@ -83,16 +85,38 @@ function LightRow({ device }: { device: AddedDevice }) {
               />
               <SegmentBar
                 label={`Segments of ${name}`}
+                ip={device.ip}
                 sources={sources}
                 selected={new Set(selected)}
                 onSelect={setPicked}
               />
             </>
           )}
+          <div className="stack path-block">
+            <div className="path-head">
+              <span className="meta">
+                Path ·{" "}
+                {device.path
+                  ? `${device.path.points.length} points${device.razer ? `, ${sources.length} segments` : ""}`
+                  : "none"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-expanded={editing}
+                onClick={() => setEditing(!editing)}
+              >
+                {editing ? "Done" : device.path ? "Edit path" : "Draw path"}
+              </Button>
+            </div>
+            {editing && <PathEditor device={device} segments={device.razer ? sources.length : 1} />}
+          </div>
           <div className="stack picker-block">
             <span className="meta">Color · {target}</span>
             <ColorPicker
               label={`Color for ${name}`}
+              ip={device.ip}
+              hasPath={!!device.path}
               value={
                 selected.length ? shared(selected.map((i) => sources[i] as Source)) : device.color
               }

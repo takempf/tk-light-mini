@@ -137,6 +137,72 @@ describe("App", () => {
     expect(within(row).getByText("Off")).toBeInTheDocument();
   });
 
+  it("draws a path over the screen for a light", async () => {
+    useStore.setState({
+      devices: [
+        {
+          id: "A",
+          ip: "10.0.0.2",
+          sku: "H61F5",
+          name: "Strip",
+          color: "all",
+          brightness: 1,
+          razer: true,
+          segments: 4,
+          on: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /strip/i }));
+    const picker = screen.getByRole("group", { name: /color for strip/i });
+    expect(within(picker).queryByRole("button", { name: "Path" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Draw path" }));
+    expect(api.setScreenPreview).toHaveBeenLastCalledWith(true);
+    expect(screen.getByText("Waiting for the screen…")).toBeInTheDocument();
+
+    // Click twice on the (mocked 200x100) drawing area: two points.
+    const svg = screen.getByRole("img", { name: /path for strip/i });
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 }) as DOMRect;
+    svg.setPointerCapture = () => {}; // not in jsdom
+    fireEvent.pointerDown(svg, { button: 0, clientX: 20, clientY: 50 });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 180, clientY: 50 });
+    const dev = () => useStore.getState().devices[0];
+    expect(dev()?.path?.points).toEqual([
+      [0.1, 0.5],
+      [0.9, 0.5],
+    ]);
+    expect(dev()?.color).toBe("path");
+    expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0]?.segments).toEqual(
+      Array(4).fill("path"),
+    );
+    expect(within(picker).getByRole("button", { name: "Path" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // Drag the second point, remove the first.
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Point 2" }), { button: 0 });
+    fireEvent.pointerMove(svg, { clientX: 180, clientY: 10 });
+    fireEvent.pointerUp(svg);
+    expect(dev()?.path?.points[1]).toEqual([0.9, 0.1]);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Point 1, start" }));
+    expect(dev()?.path?.points).toEqual([[0.9, 0.1]]);
+
+    await user.click(screen.getByRole("button", { name: "Edge loop" }));
+    expect(dev()?.path?.closed).toBe(true);
+    expect(dev()?.path?.points).toHaveLength(4);
+
+    await user.click(screen.getByRole("button", { name: "Delete path" }));
+    expect(dev()?.path).toBeUndefined();
+    expect(dev()?.color).toBe("all");
+
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(api.setScreenPreview).toHaveBeenLastCalledWith(false);
+  });
+
   it("toggles sync", async () => {
     const user = userEvent.setup();
     render(<App />);

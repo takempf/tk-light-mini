@@ -31,6 +31,37 @@ describe("lights off", () => {
   });
 });
 
+describe("paths", () => {
+  const path = {
+    points: [
+      [0, 0.5],
+      [1, 0.5],
+    ] as [number, number][],
+    width: 0.1,
+    closed: false,
+  };
+
+  it("a new path drives the light, and deleting it falls back to average", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setRazer(strip.id, true);
+    s.setSegments(strip.id, 3);
+    s.setColor(strip.id, "path", [2]);
+    s.setPath(strip.id, path);
+    const dev = () => toEngineConfig(useStore.getState()).devices[0];
+    expect(dev()).toMatchObject({ color: "path", path, segments: ["path", "path", "path"] });
+    // Editing keeps a color picked since.
+    s.setColor(strip.id, "top");
+    s.setPath(strip.id, { ...path, width: 0.2 });
+    expect(dev()?.color).toBe("top");
+    s.setColor(strip.id, "path");
+    s.setColor(strip.id, "#ff0000", [0]);
+    s.setColor(strip.id, "path", [2]);
+    s.setPath(strip.id, undefined);
+    expect(dev()).toMatchObject({ color: "all", path: null, segments: ["#ff0000", "all", "all"] });
+  });
+});
+
 describe("devices", () => {
   it("adds once, defaults to the average color", () => {
     const { addDevice } = useStore.getState();
@@ -127,7 +158,9 @@ describe("settings", () => {
       fps: 30,
       monitor: 0,
       tuning: DEFAULT_SETTINGS.tuning,
-      devices: [{ ip: lamp.ip, color: "all", brightness: 1, razer: false, segments: [] }],
+      devices: [
+        { ip: lamp.ip, color: "all", brightness: 1, razer: false, segments: [], path: null },
+      ],
     });
   });
 });

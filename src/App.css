@@ -379,6 +379,94 @@ ul {
   border-radius: 3px;
 }
 
+/* Path editor ----------------------------------------------------------- */
+
+.path-block {
+  gap: var(--tk-space-2);
+}
+.path-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tk-space-2);
+}
+.path-editor {
+  gap: var(--tk-space-3);
+}
+.path-canvas {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: var(--tk-border-width) solid var(--tk-border-subtle);
+  border-radius: var(--tk-radius-lg);
+  background: #000;
+}
+.path-canvas > canvas,
+.path-canvas > svg,
+.path-waiting {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.path-canvas > canvas {
+  image-rendering: pixelated;
+  opacity: 0.8;
+}
+.path-canvas > svg {
+  cursor: crosshair;
+  touch-action: none;
+}
+.path-waiting {
+  display: grid;
+  place-items: center;
+  color: var(--tk-fg-subtle);
+  font-size: var(--tk-text-xs);
+}
+.path-piece {
+  fill: none;
+  stroke: rgb(255 255 255 / 0.25);
+  stroke-opacity: 0.85;
+  stroke-linejoin: round;
+  stroke-linecap: butt;
+}
+.path-line {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.path-label {
+  fill: #fff;
+  stroke: rgb(0 0 0 / 0.7);
+  stroke-width: 2px;
+  paint-order: stroke;
+  vector-effect: non-scaling-stroke;
+  text-anchor: middle;
+  dominant-baseline: central;
+  font-family: var(--tk-label-font);
+  pointer-events: none;
+  user-select: none;
+}
+.path-handle {
+  fill: #fff;
+  stroke: #000;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+.path-handle[data-start] {
+  fill: var(--tk-accent);
+}
+.path-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tk-space-2);
+}
+
 .light-actions {
   display: flex;
   gap: var(--tk-space-2);

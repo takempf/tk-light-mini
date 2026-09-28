@@ -1,5 +1,5 @@
 import { api } from "./lib/api";
-import { toEngineConfig, useStore, useZoneColors } from "./store";
+import { toEngineConfig, useScreen, useStore, useZoneColors } from "./store";
 
 /**
  * Wire the store to the Rust engine:
@@ -21,7 +21,7 @@ export function startSync(): () => void {
 
   const onVisibility = () => {
     const visible = document.visibilityState === "visible";
-    if (!visible) useZoneColors.setState({ colors: null });
+    if (!visible) useZoneColors.setState({ colors: null, paths: {} });
     api.setPreview(visible).catch(() => {});
   };
   onVisibility();
@@ -29,9 +29,13 @@ export function startSync(): () => void {
 
   const unlisten = [
     api.onZones((colors) => useZoneColors.setState({ colors })),
+    api.onPaths((list) =>
+      useZoneColors.setState({ paths: Object.fromEntries(list.map((p) => [p.ip, p.colors])) }),
+    ),
+    api.onScreen((image) => useScreen.setState({ image })),
     api.onStatus((status) => {
       useStore.setState({ status });
-      if (!status.running) useZoneColors.setState({ colors: null });
+      if (!status.running) useZoneColors.setState({ colors: null, paths: {} });
     }),
   ];
 

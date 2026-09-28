@@ -1,17 +1,19 @@
-import { isLive, PALETTES, type Swatch } from "../lib/colors";
+import { isLive, palettesFor, type Swatch } from "../lib/colors";
 import type { Source } from "../lib/types";
 import { css, useSourceColor } from "./ZonePreview";
 
 function SwatchButton({
   swatch,
+  ip,
   pressed,
   onPick,
 }: {
   swatch: Swatch;
+  ip: string;
   pressed: boolean;
   onPick: (s: Source) => void;
 }) {
-  const color = useSourceColor(swatch.source);
+  const color = useSourceColor(swatch.source, ip);
   return (
     <button
       type="button"
@@ -32,17 +34,23 @@ function SwatchButton({
 /** Palettes of live screen colors and fixed colors. */
 export function ColorPicker({
   label,
+  ip,
+  hasPath,
   value,
   onPick,
 }: {
   label: string;
+  /** The light's IP, for its live path color. */
+  ip: string;
+  /** Offer "Path": the light has one. */
+  hasPath: boolean;
   /** The current color, if there's one to show as picked. */
   value: Source | undefined;
   onPick: (s: Source) => void;
 }) {
   return (
     <fieldset className="picker" aria-label={label}>
-      {PALETTES.map((p) => (
+      {palettesFor(hasPath).map((p) => (
         <div key={p.name} className="palette">
           <span className="meta">{p.name}</span>
           <div className="swatches">
@@ -50,6 +58,7 @@ export function ColorPicker({
               <SwatchButton
                 key={s.source}
                 swatch={s}
+                ip={ip}
                 pressed={s.source === value}
                 onPick={onPick}
               />

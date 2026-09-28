@@ -9,11 +9,18 @@ export function useZoneColor(zone: Zone): Rgb | undefined {
   return useZoneColors((s) => s.colors?.[ZONES.indexOf(zone)]);
 }
 
-/** A source's current color: live ones follow the screen, fixed ones don't. */
-export function useSourceColor(source: Source): Rgb | undefined {
-  const live = useZoneColors((s) =>
-    isLive(source) ? s.colors?.[ZONES.indexOf(source)] : undefined,
-  );
+/**
+ * A source's current color: live ones follow the screen, fixed ones don't.
+ * "path" needs the light's `ip`, and `index` picks the segment.
+ */
+export function useSourceColor(source: Source, ip?: string, index = 0): Rgb | undefined {
+  const live = useZoneColors((s) => {
+    if (source === "path") {
+      const p = ip === undefined ? undefined : s.paths[ip];
+      return p?.[index] ?? p?.[0];
+    }
+    return isLive(source) ? s.colors?.[ZONES.indexOf(source)] : undefined;
+  });
   return isLive(source) ? live : hexRgb(source);
 }
 
