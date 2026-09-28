@@ -238,7 +238,182 @@ describe("Canvas", () => {
     expect(points()?.[0]?.[1]).toBeCloseTo(0.6);
 
     fireEvent.pointerDown(svg, { button: 0, clientX: 190, clientY: 10 });
+    fireEvent.pointerUp(svg);
     expect(useStore.getState().selection).toBeNull();
     expect(screen.getByRole("button", { name: "Edit Lamp" })).toBeInTheDocument();
+  });
+
+  const square = {
+    points: [
+      [0.2, 0.2],
+      [0.8, 0.2],
+      [0.8, 0.8],
+      [0.2, 0.8],
+    ] as [number, number][],
+    width: 0.1,
+    closed: true,
+  };
+  const selected = (path: typeof square) => {
+    useStore.setState({
+      devices: [light({ sections: [{ count: 1, color: "path", path }] })],
+      selection: { id: "A", section: 0 },
+    });
+  };
+  const handle = (name: string) => screen.getByRole("button", { name });
+  const picked = () => useStore.getState().points;
+
+  it("picks several points and moves them together", () => {
+    selected(square);
+    render(<App />);
+    const svg = layout();
+    fireEvent.pointerDown(handle("Point 2"), { button: 0, clientX: 160, clientY: 20 });
+    fireEvent.pointerUp(svg);
+    fireEvent.pointerDown(handle("Point 3"), { button: 0, shiftKey: true });
+    fireEvent.pointerUp(svg);
+    expect(picked()).toEqual([1, 2]);
+    expect(handle("Point 3")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("2 points picked")).toBeInTheDocument();
+
+    // Dragging one moves both; one undo puts them back.
+    fireEvent.pointerDown(handle("Point 2"), { button: 0, clientX: 160, clientY: 20 });
+    fireEvent.pointerMove(svg, { clientX: 170, clientY: 20 });
+    fireEvent.pointerUp(svg);
+    expect(points()?.map(([x]) => x)).toEqual([0.2, 0.85, 0.85, 0.2]);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(points()?.map(([x]) => x)).toEqual([0.2, 0.8, 0.8, 0.2]);
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true, shiftKey: true });
+    expect(points()?.[1]?.[0]).toBe(0.85);
+
+    // Undo and redo unpick, since points may have come or gone.
+    expect(picked()).toEqual([]);
+    // Shift+click adds points, and takes them back out.
+    for (const name of ["Point 2", "Point 3", "Point 2"]) {
+      fireEvent.pointerDown(handle(name), { button: 0, shiftKey: true });
+      fireEvent.pointerUp(svg);
+    }
+    expect(picked()).toEqual([2]);
+  });
+
+  it("picks points in a box and deletes them", () => {
+    selected(square);
+    const { container } = render(<App />);
+    const svg = layout();
+    fireEvent.pointerDown(svg, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(svg, { clientX: 190, clientY: 50 });
+    expect(container.querySelector(".marquee")).not.toBeNull();
+    fireEvent.pointerUp(svg);
+    expect(picked()).toEqual([0, 1]);
+    expect(useStore.getState().selection).not.toBeNull();
+    // Shift adds another box.
+    fireEvent.pointerDown(svg, { button: 0, clientX: 10, clientY: 60, shiftKey: true });
+    fireEvent.pointerMove(svg, { clientX: 100, clientY: 95 });
+    fireEvent.pointerUp(svg);
+    expect(picked()).toEqual([0, 1, 3]);
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(points()).toEqual([[0.8, 0.8]]);
+    expect(picked()).toEqual([]);
+  });
+
+  it("picks all, nudges, and steps back with Esc", () => {
+    selected(square);
+    render(<App />);
+    fireEvent.keyDown(window, { key: "a", ctrlKey: true });
+    expect(picked()).toEqual([0, 1, 2, 3]);
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowDown", shiftKey: true });
+    expect(points()?.[0]?.[0]).toBeCloseTo(0.205);
+    expect(points()?.[0]?.[1]).toBeCloseTo(0.3);
+    // Keys typed in a field stay there.
+    fireEvent.keyDown(screen.getByRole("textbox", { name: /name for/i }), { key: "Delete" });
+    expect(points()).toHaveLength(4);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(picked()).toEqual([]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useStore.getState().selection).toBeNull();
+  });
+
+  it("moves a band straight with Shift, and snaps it to guides", () => {
+    const line = {
+      points: [
+        [0.1, 0.5],
+        [0.5, 0.5],
+      ] as [number, number][],
+      width: 0.12,
+      closed: false,
+    };
+    selected(line);
+    const { container } = render(<App />);
+    const svg = layout();
+    fireEvent.pointerDown(svg, { button: 0, clientX: 40, clientY: 50 });
+    fireEvent.pointerMove(svg, { clientX: 60, clientY: 53, shiftKey: true });
+    expect(points()?.[0]?.[0]).toBeCloseTo(0.2);
+    expect(points()?.[0]?.[1]).toBeCloseTo(0.5);
+    // 97px across puts the second point 3px from the right edge: it snaps there.
+    fireEvent.pointerMove(svg, { clientX: 137, clientY: 70 });
+    expect(points()?.[1]?.[0]).toBeCloseTo(1);
+    expect(points()?.[0]?.[0]).toBeCloseTo(0.6);
+    expect(points()?.[0]?.[1]).toBeCloseTo(0.7);
+    expect(container.querySelector(".guide")).not.toBeNull();
+    fireEvent.pointerUp(svg);
+  });
+
+  it("adds a point to the end with Ctrl+click", () => {
+    selected({ ...square, closed: false });
+    render(<App />);
+    const svg = layout();
+    fireEvent.pointerDown(svg, { button: 0, clientX: 150, clientY: 70, ctrlKey: true });
+    expect(points()).toHaveLength(5);
+    expect(points()?.[4]).toEqual([0.75, 0.7]);
+    expect(picked()).toEqual([4]);
+  });
+
+  it("draws with Backspace, closes on the first point, and ends on double-click", async () => {
+    useStore.setState({ devices: [light({ name: "Strip" })] });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Edit Strip" }));
+    await user.click(screen.getByRole("button", { name: "Draw" }));
+    const svg = layout();
+    for (const [x, y] of [
+      [30, 30],
+      [170, 30],
+      [120, 90],
+      [170, 70],
+    ]) {
+      fireEvent.pointerDown(svg, { button: 0, clientX: x, clientY: y });
+    }
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(points()).toHaveLength(3);
+    fireEvent.pointerDown(handle("Point 1, start"), { button: 0 });
+    expect(useStore.getState().drawing).toBe(false);
+    expect(useStore.getState().devices[0]?.sections[0]?.path?.closed).toBe(true);
+    // The whole drawing is one undo step.
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(points()).toBeUndefined();
+
+    await user.click(screen.getByRole("button", { name: "Draw" }));
+    fireEvent.pointerDown(svg, { button: 0, clientX: 30, clientY: 30 });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 170, clientY: 30 });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 170, clientY: 30 });
+    fireEvent.doubleClick(svg, { clientX: 170, clientY: 30 });
+    expect(useStore.getState().drawing).toBe(false);
+    expect(points()).toHaveLength(2);
+  });
+
+  it("sets a picked point exactly, and where a loop starts", () => {
+    selected(square);
+    render(<App />);
+    const svg = layout();
+    fireEvent.pointerDown(handle("Point 3"), { button: 0, clientX: 160, clientY: 80 });
+    fireEvent.pointerUp(svg);
+    fireEvent.change(screen.getByRole("spinbutton", { name: /x, %/i }), {
+      target: { value: "75" },
+    });
+    expect(points()?.[2]).toEqual([0.75, 0.8]);
+    fireEvent.click(screen.getByRole("button", { name: "Start here" }));
+    expect(points()?.[0]).toEqual([0.75, 0.8]);
+    expect(picked()).toEqual([0]);
+    fireEvent.click(screen.getByRole("button", { name: "Flip ↔" }));
+    expect(points()?.[0]?.[0]).toBeCloseTo(0.25);
   });
 });

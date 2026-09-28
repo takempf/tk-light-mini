@@ -21,12 +21,15 @@ Click a light, in the list or on the screen, to open it. Inside you can rename i
 
 The big screen shows every light as a band over a live copy of your screen.
 
-- **Move:** drag a light's band.
-- **Reshape:** drag its points. Double-click the band to add a point, and right-click a point to remove it. The big point is where the strip starts.
-- **Draw from scratch:** **Draw**, then click out the points. **Enter** or **Done drawing** finishes.
-- **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place.
+- **Move:** drag a light's band. Hold **Shift** to move it straight across or straight up and down.
+- **Pick points:** click a point. **Shift**+click adds or removes points, dragging a box on empty space picks the points inside it, and **Ctrl+A** picks them all. **Esc** unpicks.
+- **Reshape:** drag a point to move every picked point with it. **Arrow keys** nudge them (**Shift** for bigger steps), and **Delete** or right-click removes them. Double-click the band to add a point there, or **Ctrl**+click to add one after the last. The big point is where the strip starts.
+- **Exact spots:** with one point picked, type its X and Y. On a loop, **Start here** makes it the first point.
+- **Draw from scratch:** **Draw**, then click out the points. **Backspace** takes back the last one, and clicking the first point closes the loop. Double-click, **Enter** or **Done drawing** finishes.
+- **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place. **Flip** mirrors a path across the middle, handy for a pair of bars.
 - **Thickness** sets how wide a band of the picture the light looks at.
-- Points snap to other points and to the screen's edges and middle, with a guide line. Hold **Shift** to keep lines straight (0, 45 or 90 degrees), or **Alt** to turn snapping off.
+- Points snap to other points and to the screen's edges and middle, with a guide line. Hold **Shift** while dragging a single point to keep its line at 0, 45 or 90 degrees, and **Alt** to turn snapping off.
+- **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Shift+Z**) cover placement, sections and colors. **Shortcuts** above the screen lists all of these.
 
 ### Segments and sections
 

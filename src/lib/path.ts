@@ -131,13 +131,50 @@ export function zonePath(zone: OldZone, aspect: number, width: number): LightPat
 }
 
 /** The path moved by `[dx, dy]`, held so every point stays on screen. */
-export function movePath(p: LightPath, [dx, dy]: Pt): LightPath {
-  if (p.points.length === 0) return p;
-  const xs = p.points.map(([x]) => x);
-  const ys = p.points.map(([, y]) => y);
+export function movePath(p: LightPath, delta: Pt): LightPath {
+  return movePoints(p, p.points.keys(), delta);
+}
+
+/** Points `indices` moved by `[dx, dy]` together, held so they all stay on screen. */
+export function movePoints(p: LightPath, indices: Iterable<number>, [dx, dy]: Pt): LightPath {
+  const only = new Set(indices);
+  const moved = p.points.filter((_, i) => only.has(i));
+  if (moved.length === 0) return p;
+  const xs = moved.map(([x]) => x);
+  const ys = moved.map(([, y]) => y);
   const mx = Math.min(Math.max(dx, -Math.min(...xs)), 1 - Math.max(...xs));
   const my = Math.min(Math.max(dy, -Math.min(...ys)), 1 - Math.max(...ys));
-  return { ...p, points: p.points.map(([x, y]) => [x + mx, y + my]) };
+  return {
+    ...p,
+    points: p.points.map(([x, y], i) => (only.has(i) ? [x + mx, y + my] : [x, y])),
+  };
+}
+
+/** The path mirrored across the middle of the screen. */
+export function flipPath(p: LightPath, axis: "x" | "y"): LightPath {
+  return {
+    ...p,
+    points: p.points.map(([x, y]) => (axis === "x" ? [1 - x, y] : [x, 1 - y])),
+  };
+}
+
+/** A closed loop starting at point `i` instead, going the same way. */
+export function startAt(p: LightPath, i: number): LightPath {
+  if (i <= 0 || i >= p.points.length) return p;
+  return { ...p, points: [...p.points.slice(i), ...p.points.slice(0, i)] };
+}
+
+/** The path without points `indices`. */
+export function removePoints(p: LightPath, indices: Iterable<number>): LightPath {
+  const drop = new Set(indices);
+  return { ...p, points: p.points.filter((_, i) => !drop.has(i)) };
+}
+
+/** Indices of the points inside the box between `a` and `b`. */
+export function pointsIn(p: LightPath, a: Pt, b: Pt): number[] {
+  const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+  const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+  return p.points.flatMap(([x, y], i) => (x >= x0 && x <= x1 && y >= y0 && y <= y1 ? [i] : []));
 }
 
 /**

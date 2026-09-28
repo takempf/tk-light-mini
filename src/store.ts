@@ -50,6 +50,11 @@ interface AppState {
   selection: Selection | null;
   /** Clicks on the screen add points to the selected section. */
   drawing: boolean;
+  /** Picked points of the selected section's path. */
+  points: number[];
+  /** Layout and color edits to undo, oldest first, and ones undone to redo. */
+  past: Snapshot[];
+  future: Snapshot[];
 
   scan: () => Promise<void>;
   loadMonitors: () => Promise<void>;
@@ -72,7 +77,9 @@ interface AppState {
   splitSection: (id: string, section: number, at?: number) => void;
   /** Join a section with the next. */
   mergeSections: (id: string, section: number) => void;
+  /** Select a section. Clears the picked points. */
   select: (s: Selection | null) => void;
+  setPoints: (points: number[]) => void;
   /** Start or stop drawing. Stopping drops a path left with under two points. */
   setDrawing: (on: boolean) => void;
   setEnabled: (on: boolean) => void;
@@ -82,7 +89,29 @@ interface AppState {
   setMonitor: (index: number) => void;
   setTuning: (t: Partial<Tuning>) => void;
   resetTuning: () => void;
+  /** Undo or redo the last layout or color edit. */
+  undo: () => void;
+  redo: () => void;
+  /** End the current edit, so the next change is its own undo step. */
+  breakUndo: () => void;
 }
+
+/** Each light's sections and colors, for undo. */
+type Snapshot = { id: string; sections: Section[]; segmentColors?: (Source | null)[] }[];
+
+const snapshot = (devices: readonly AddedDevice[]): Snapshot =>
+  devices.map(({ id, sections, segmentColors }) => ({ id, sections, segmentColors }));
+
+/** `devices` with sections and colors from `snap`. Lights removed since stay removed. */
+const restore = (devices: readonly AddedDevice[], snap: Snapshot): AddedDevice[] =>
+  devices.map((d) => {
+    const s = snap.find((x) => x.id === d.id);
+    return s ? { ...d, sections: s.sections, segmentColors: s.segmentColors } : d;
+  });
+
+const UNDO_LIMIT = 100;
+/** Changes with the same key this close together are one undo step (a drag, a slider). */
+const UNDO_MERGE_MS = 1000;
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -100,6 +129,23 @@ export const useStore = create<AppState>()(
       /** Edit a light's fitted sections. */
       const editSections = (id: string, f: (sections: Section[], d: AddedDevice) => Section[]) =>
         edit(id, (d) => ({ ...d, sections: f(sectionsOf(d), d) }));
+      let lastKey: string | null = null;
+      let lastAt = 0;
+      /**
+       * Save an undo step before a change. Changes with the same `key` in a row
+       * merge into one; no key is always its own step.
+       */
+      const record = (key: string | null = null) => {
+        const now = Date.now();
+        const merge = key !== null && key === lastKey && now - lastAt < UNDO_MERGE_MS;
+        lastKey = key;
+        lastAt = now;
+        if (merge) return;
+        set((s) => ({
+          past: [...s.past.slice(1 - UNDO_LIMIT), snapshot(s.devices)],
+          future: [],
+        }));
+      };
       /** Stop drawing. A path left with under two points is dropped. */
       const endDrawing = () => {
         const { drawing, selection } = get();
@@ -125,6 +171,9 @@ export const useStore = create<AppState>()(
         status: { running: false, error: null },
         selection: null,
         drawing: false,
+        points: [],
+        past: [],
+        future: [],
 
         scan: async () => {
           if (get().scanning) return;
@@ -173,6 +222,7 @@ export const useStore = create<AppState>()(
                   ],
                   selection: { id: d.id, section: 0 },
                   drawing: false,
+                  points: [],
                 },
           ),
         removeDevice: (id) =>
@@ -180,6 +230,7 @@ export const useStore = create<AppState>()(
             devices: s.devices.filter((d) => d.id !== id),
             selection: s.selection?.id === id ? null : s.selection,
             drawing: s.selection?.id === id ? false : s.drawing,
+            points: s.selection?.id === id ? [] : s.points,
           })),
         renameDevice: (id, name) => edit(id, (d) => ({ ...d, name })),
         setDeviceBrightness: (id, brightness) => edit(id, (d) => ({ ...d, brightness })),
@@ -202,7 +253,8 @@ export const useStore = create<AppState>()(
             set({ selection: { id, section: sectionsOf(d).length - 1 } });
           }
         },
-        setSectionColor: (id, section, color) =>
+        setSectionColor: (id, section, color) => {
+          record();
           edit(id, (d) => {
             const sections = sectionsOf(d);
             const target = sections[section];
@@ -216,36 +268,52 @@ export const useStore = create<AppState>()(
               sections: sections.map((s, k) => (k === section ? { ...s, color } : s)),
               segmentColors,
             };
-          }),
-        setSegmentColors: (id, segments, color) =>
+          });
+        },
+        setSegmentColors: (id, segments, color) => {
+          record();
           edit(id, (d) => {
             const segmentColors = [...(d.segmentColors ?? [])];
             for (const i of segments) segmentColors[i] = color;
             return { ...d, segmentColors: Array.from(segmentColors, (c) => c ?? null) };
-          }),
-        setSectionPath: (id, section, path) =>
+          });
+        },
+        setSectionPath: (id, section, path) => {
+          if (!get().drawing) record(`path:${id}:${section}`);
           editSections(id, (sections) =>
             sections.map((s, k) => (k === section ? { ...s, path } : s)),
-          ),
+          );
+        },
         splitSection: (id, section, at) => {
+          record();
           editSections(id, (sections) => splitSection(sections, section, at));
           const d = get().devices.find((x) => x.id === id);
           if (d && sectionsOf(d).length > section + 1) {
-            set({ selection: { id, section: section + 1 }, drawing: false });
+            set({ selection: { id, section: section + 1 }, drawing: false, points: [] });
           }
         },
         mergeSections: (id, section) => {
+          record();
           editSections(id, (sections) => mergeSections(sections, section));
           const sel = get().selection;
           if (sel?.id === id && sel.section > section) {
-            set({ selection: { id, section: sel.section - 1 }, drawing: false });
+            set({ selection: { id, section: sel.section - 1 }, drawing: false, points: [] });
           }
         },
         select: (selection) => {
           endDrawing();
-          set({ selection, drawing: false });
+          const same =
+            selection?.id === get().selection?.id &&
+            selection?.section === get().selection?.section;
+          set({ selection, drawing: false, points: same ? get().points : [] });
         },
-        setDrawing: (drawing) => (drawing ? set({ drawing }) : endDrawing()),
+        setPoints: (points) => set({ points }),
+        setDrawing: (drawing) => {
+          if (!drawing) return endDrawing();
+          // The whole drawing is one undo step.
+          record();
+          set({ drawing, points: [] });
+        },
         setEnabled: (enabled) => set({ enabled }),
         lightsOff: async () => {
           set({ enabled: false });
@@ -257,6 +325,33 @@ export const useStore = create<AppState>()(
           set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
         resetTuning: () =>
           set((s) => ({ settings: { ...s.settings, tuning: DEFAULT_SETTINGS.tuning } })),
+        undo: () => {
+          const { past, drawing } = get();
+          const prev = past[past.length - 1];
+          if (!prev || drawing) return;
+          lastKey = null;
+          set((s) => ({
+            past: s.past.slice(0, -1),
+            future: [...s.future, snapshot(s.devices)],
+            devices: restore(s.devices, prev),
+            points: [],
+          }));
+        },
+        redo: () => {
+          const { future, drawing } = get();
+          const next = future[future.length - 1];
+          if (!next || drawing) return;
+          lastKey = null;
+          set((s) => ({
+            future: s.future.slice(0, -1),
+            past: [...s.past, snapshot(s.devices)],
+            devices: restore(s.devices, next),
+            points: [],
+          }));
+        },
+        breakUndo: () => {
+          lastKey = null;
+        },
       };
     },
     {

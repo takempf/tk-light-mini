@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { sectionStarts, sectionsOf, segmentCount, segmentSources } from "../lib/lights";
-import { edgeLoop, linePath, reversePath } from "../lib/path";
+import { edgeLoop, flipPath, linePath, removePoints, reversePath, startAt } from "../lib/path";
 import type { AddedDevice, LightPath, Source } from "../lib/types";
 import { useScreen, useStore } from "../store";
 import { Button, Icon, Input, Switch } from "../ui";
@@ -29,8 +29,9 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
     setPath(device.id, section, p);
   };
   const draw = () => {
-    setPath(device.id, section, { points: [], width, closed: false });
+    // Drawing first, so the whole drawing is one undo step.
     setDrawing(true);
+    setPath(device.id, section, { points: [], width, closed: false });
   };
   return (
     <div className="stack placement">
@@ -79,12 +80,90 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
             >
               Reverse
             </Button>
+            <Button size="sm" onClick={() => place(flipPath(path, "x"))}>
+              Flip ↔
+            </Button>
+            <Button size="sm" onClick={() => place(flipPath(path, "y"))}>
+              Flip ↕
+            </Button>
             <Button size="sm" variant="danger" onClick={() => place(undefined)}>
               Remove from screen
             </Button>
           </div>
+          <PickedPoints path={path} onChange={place} />
         </>
       )}
+    </div>
+  );
+}
+
+/** Exact position of a picked point, and what to do with picked points. */
+function PickedPoints({ path, onChange }: { path: LightPath; onChange: (p: LightPath) => void }) {
+  const points = useStore((s) => s.points);
+  const setPoints = useStore((s) => s.setPoints);
+  const picked = points.filter((i) => i < path.points.length);
+  if (picked.length === 0) return null;
+  const one = picked.length === 1 ? (picked[0] as number) : undefined;
+  const pt = one === undefined ? undefined : path.points[one];
+  const setAxis = (axis: 0 | 1, v: number) => {
+    if (one === undefined || !pt || Number.isNaN(v)) return;
+    const q: [number, number] = [...pt];
+    q[axis] = Math.min(1, Math.max(0, v / 100));
+    onChange({ ...path, points: path.points.map((p, i) => (i === one ? q : p)) });
+  };
+  const round = (v: number) => Math.round(v * 1000) / 10;
+  return (
+    <div className="stack picked">
+      <span className="meta">
+        {one === undefined ? `${picked.length} points picked` : `Point ${one + 1}`}
+      </span>
+      {pt && (
+        <div className="point-fields">
+          <Input
+            size="sm"
+            type="number"
+            aria-label="X, % from the left"
+            min={0}
+            max={100}
+            step={0.1}
+            value={round(pt[0])}
+            onChange={(e) => setAxis(0, e.target.valueAsNumber)}
+          />
+          <Input
+            size="sm"
+            type="number"
+            aria-label="Y, % from the top"
+            min={0}
+            max={100}
+            step={0.1}
+            value={round(pt[1])}
+            onChange={(e) => setAxis(1, e.target.valueAsNumber)}
+          />
+        </div>
+      )}
+      <div className="button-row">
+        {one !== undefined && one > 0 && path.closed && (
+          <Button
+            size="sm"
+            onClick={() => {
+              onChange(startAt(path, one));
+              setPoints([0]);
+            }}
+          >
+            Start here
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => {
+            onChange(removePoints(path, picked));
+            setPoints([]);
+          }}
+        >
+          {one === undefined ? `Remove ${picked.length} points` : "Remove point"}
+        </Button>
+      </div>
     </div>
   );
 }

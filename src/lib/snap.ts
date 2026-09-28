@@ -87,3 +87,73 @@ export function snapPoint(p: Pt, o: SnapOptions): { point: Pt; guides: Guides } 
   }
   return { point: [clamp01(x / w), clamp01(y / h)], guides };
 }
+
+export interface MoveOptions {
+  /** Lock the move to horizontal or vertical. */
+  shift?: boolean;
+  /** Snap to other points, the screen edges and its center. Default on. */
+  guides?: boolean;
+  /** Points to snap to, not the ones being moved. */
+  targets: readonly Pt[];
+  w: number;
+  h: number;
+  tol: number;
+}
+
+/**
+ * How far points `moved` really move when dragged by `delta` (screen
+ * fractions): Shift keeps it level or upright, and the nearest point to a guide
+ * on each axis pulls the whole group onto it.
+ */
+export function snapMove(
+  moved: readonly Pt[],
+  delta: Pt,
+  o: MoveOptions,
+): { delta: Pt; guides: Guides } {
+  const { w, h, tol } = o;
+  let [dx, dy] = [delta[0] * w, delta[1] * h];
+  if (o.shift) {
+    if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+    else dx = 0;
+  }
+  const guides: Guides = {};
+  if (o.guides !== false) {
+    const xs = [...FRAME, ...o.targets.map(([x]) => x)].map((x) => x * w);
+    const ys = [...FRAME, ...o.targets.map(([, y]) => y)].map((y) => y * h);
+    /** The smallest pull that puts one of `vs` on a line, if any is close. */
+    const pull = (vs: number[], lines: number[]) => {
+      let best: { by: number; at: number } | undefined;
+      for (const v of vs) {
+        const l = nearest(v, lines, tol);
+        if (l !== undefined && (!best || Math.abs(l - v) < Math.abs(best.by))) {
+          best = { by: l - v, at: l };
+        }
+      }
+      return best;
+    };
+    // A locked axis stays put.
+    const px =
+      !o.shift || dx !== 0
+        ? pull(
+            moved.map(([x]) => x * w + dx),
+            xs,
+          )
+        : undefined;
+    const py =
+      !o.shift || dy !== 0
+        ? pull(
+            moved.map(([, y]) => y * h + dy),
+            ys,
+          )
+        : undefined;
+    if (px) {
+      dx += px.by;
+      guides.x = px.at / w;
+    }
+    if (py) {
+      dy += py.by;
+      guides.y = py.at / h;
+    }
+  }
+  return { delta: [dx / w, dy / h], guides };
+}

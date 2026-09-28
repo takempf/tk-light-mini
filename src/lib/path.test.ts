@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   distanceTo,
   edgeLoop,
+  flipPath,
   insertIndex,
   movePath,
+  movePoints,
+  pointsIn,
+  removePoints,
   reversePath,
   splitPath,
+  startAt,
   zonePath,
 } from "./path";
 
@@ -157,5 +162,49 @@ describe("zonePath", () => {
 
   it("covers the screen for the average", () => {
     expect(zonePath("all", 2, 0.2).width).toBe(1);
+  });
+});
+
+describe("point tools", () => {
+  const square = {
+    points: [
+      [0.2, 0.2],
+      [0.8, 0.2],
+      [0.8, 0.8],
+      [0.2, 0.8],
+    ] as [number, number][],
+    width: 0.1,
+    closed: true,
+  };
+
+  it("moves only the picked points, held on screen together", () => {
+    const moved = movePoints(square, [1, 2], [0.5, 0]);
+    expect(moved.points.map(([x]) => x)).toEqual([0.2, 1, 1, 0.2]);
+    expect(moved.points[3]).toEqual([0.2, 0.8]);
+    expect(movePoints(square, [], [0.1, 0.1])).toBe(square);
+  });
+
+  it("mirrors across the middle", () => {
+    const line = { ...square, points: [[0.1, 0.3]] as [number, number][] };
+    expect(flipPath(line, "x").points[0]?.[0]).toBeCloseTo(0.9);
+    expect(flipPath(line, "y").points[0]?.[1]).toBeCloseTo(0.7);
+  });
+
+  it("starts a loop at another point, same direction", () => {
+    expect(startAt(square, 2).points).toEqual([
+      [0.8, 0.8],
+      [0.2, 0.8],
+      [0.2, 0.2],
+      [0.8, 0.2],
+    ]);
+    expect(startAt(square, 0)).toBe(square);
+  });
+
+  it("removes points and finds the ones in a box", () => {
+    expect(removePoints(square, [0, 3]).points).toEqual([
+      [0.8, 0.2],
+      [0.8, 0.8],
+    ]);
+    expect(pointsIn(square, [0.9, 0.9], [0.5, 0.1])).toEqual([1, 2]);
   });
 });

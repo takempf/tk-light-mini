@@ -18,6 +18,9 @@ beforeEach(() => {
     scanError: null,
     selection: null,
     drawing: false,
+    points: [],
+    past: [],
+    future: [],
   });
 });
 
@@ -278,5 +281,73 @@ describe("migrate from v6", () => {
     expect(old).toMatchObject({ brightness: 1, on: true, razer: false });
     expect(old).not.toHaveProperty("whiteLeds");
     expect(old?.sections[0]?.path?.width).toBe(1);
+  });
+});
+
+describe("undo", () => {
+  const moved = (y: number) => ({
+    ...path,
+    points: [
+      [0, y],
+      [1, y],
+    ] as [number, number][],
+  });
+  const current = () => useStore.getState().devices[0]?.sections[0]?.path;
+
+  it("merges a drag into one step, and breaks between edits", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setSectionPath(strip.id, 0, path);
+    s.breakUndo();
+    s.setSectionPath(strip.id, 0, moved(0.6));
+    s.setSectionPath(strip.id, 0, moved(0.7));
+    s.breakUndo();
+    s.setSectionColor(strip.id, 0, "#ff0000");
+    s.undo();
+    expect(useStore.getState().devices[0]?.sections[0]?.color).toBe("path");
+    expect(current()).toEqual(moved(0.7));
+    s.undo();
+    expect(current()).toEqual(path);
+    s.redo();
+    expect(current()).toEqual(moved(0.7));
+    // A new edit drops what could be redone.
+    s.setSectionPath(strip.id, 0, moved(0.1));
+    expect(useStore.getState().future).toEqual([]);
+  });
+
+  it("undoes a whole drawing at once, but not while drawing", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    const before = current();
+    s.setDrawing(true);
+    s.setSectionPath(strip.id, 0, { ...path, points: [[0.1, 0.1]] });
+    s.setSectionPath(strip.id, 0, path);
+    s.undo();
+    expect(current()).toEqual(path);
+    s.setDrawing(false);
+    s.undo();
+    expect(current()).toEqual(before);
+  });
+
+  it("undoes splits, and leaves removed lights removed", () => {
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.addDevice(strip);
+    s.setRazer(strip.id, true);
+    s.splitSection(strip.id, 0);
+    s.removeDevice(lamp.id);
+    s.undo();
+    expect(useStore.getState().devices.map((d) => d.id)).toEqual([strip.id]);
+    expect(useStore.getState().devices[0]?.sections).toHaveLength(1);
+  });
+
+  it("clears picked points when the selection changes", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setPoints([0, 1]);
+    s.select({ id: strip.id, section: 0 });
+    expect(useStore.getState().points).toEqual([0, 1]);
+    s.select(null);
+    expect(useStore.getState().points).toEqual([]);
   });
 });

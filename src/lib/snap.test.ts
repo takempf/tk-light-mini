@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { snapPoint } from "./snap";
+import { snapMove, snapPoint } from "./snap";
 
 // A 200x100 screen, so fractions and pixels differ per axis.
 const base = { targets: [] as [number, number][], w: 200, h: 100, tol: 6 };
@@ -50,5 +50,37 @@ describe("snapPoint", () => {
     expect(r.point[0]).toBeCloseTo(0.5);
     expect(r.point[1]).toBeCloseTo(0.2);
     expect(r.guides).toEqual({ x: 0.5 });
+  });
+});
+
+describe("snapMove", () => {
+  const pts: [number, number][] = [
+    [0.2, 0.2],
+    [0.3, 0.3],
+  ];
+
+  it("moves freely away from guides", () => {
+    const r = snapMove(pts, [0.1, 0.07], base);
+    expect(r.delta[0]).toBeCloseTo(0.1);
+    expect(r.delta[1]).toBeCloseTo(0.07);
+    expect(r.guides).toEqual({});
+  });
+
+  it("pulls the group so its nearest point sits on a guide", () => {
+    // The second point lands at x 0.49: 2px from the middle.
+    const r = snapMove(pts, [0.19, 0.07], base);
+    expect(r.delta[0]).toBeCloseTo(0.2);
+    expect(r.guides).toEqual({ x: 0.5 });
+  });
+
+  it("Shift keeps it level or upright", () => {
+    const r = snapMove(pts, [0.12, 0.03], { ...base, shift: true, guides: false });
+    expect(r.delta).toEqual([0.12, 0]);
+    const up = snapMove(pts, [0.01, 0.3], { ...base, shift: true, guides: false });
+    expect(up.delta[0]).toBe(0);
+  });
+
+  it("can turn guides off", () => {
+    expect(snapMove(pts, [0.19, 0], { ...base, guides: false }).delta[0]).toBeCloseTo(0.19);
   });
 });

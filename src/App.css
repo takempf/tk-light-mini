@@ -208,8 +208,20 @@ body {
   overflow: visible;
   touch-action: none;
 }
-.canvas-box[data-drawing] > svg {
+.canvas-box[data-pointer="draw"] > svg {
   cursor: crosshair;
+}
+.canvas-box[data-pointer="move"] > svg {
+  cursor: move;
+}
+.canvas-box[data-pointer="grabbing"] > svg {
+  cursor: grabbing;
+}
+.canvas-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--tk-space-1);
+  margin-block: calc(-1 * var(--tk-space-2));
 }
 .canvas-waiting {
   display: grid;
@@ -226,6 +238,9 @@ body {
 .shape {
   opacity: 0.6;
   pointer-events: none;
+}
+.shape[data-hover] {
+  opacity: 0.85;
 }
 .shape[data-selected] {
   opacity: 1;
@@ -296,10 +311,24 @@ body {
 .editor-handle[data-start] {
   fill: var(--tk-accent);
 }
+.editor-handle[aria-pressed="true"] {
+  stroke: var(--tk-accent);
+  stroke-width: 3px;
+}
+.marquee {
+  fill: color-mix(in oklab, var(--tk-accent) 15%, transparent);
+  stroke: var(--tk-accent);
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
 .editor-handle:focus-visible {
   outline: none;
   stroke: var(--tk-accent);
   stroke-width: 3px;
+}
+.canvas-box[data-pointer="grabbing"] .editor-handle {
+  cursor: grabbing;
 }
 
 /* Sidebar --------------------------------------------------------------- */
@@ -507,7 +536,40 @@ body {
   border-radius: 50%;
 }
 
+.picked {
+  gap: var(--tk-space-2);
+}
+.point-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--tk-space-2);
+}
+
 /* Settings -------------------------------------------------------------- */
+
+.shortcuts {
+  width: 24rem;
+}
+.shortcuts dl {
+  display: grid;
+  gap: var(--tk-space-2);
+  margin: 0;
+  font-size: var(--tk-text-sm);
+}
+.shortcuts dl > div {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: var(--tk-space-3);
+}
+.shortcuts dt {
+  color: var(--tk-fg);
+  font-family: var(--tk-font-mono);
+  font-size: var(--tk-text-xs);
+}
+.shortcuts dd {
+  margin: 0;
+  color: var(--tk-fg-muted);
+}
 
 .settings {
   width: 18rem;

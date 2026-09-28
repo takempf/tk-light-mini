@@ -1,10 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { css, hexRgb } from "../lib/colors";
 import { sectionStarts, sectionsOf, segmentSources } from "../lib/lights";
-import { clampPoint, distanceTo, insertIndex, movePath, splitPath } from "../lib/path";
-import { type Guides, snapPoint } from "../lib/snap";
+import {
+  clampPoint,
+  distanceTo,
+  insertIndex,
+  movePath,
+  movePoints,
+  pointsIn,
+  removePoints,
+  splitPath,
+} from "../lib/path";
+import { type Guides, snapMove, snapPoint } from "../lib/snap";
 import type { AddedDevice, LightPath, Rgb, Source } from "../lib/types";
 import { useLive, useScreen, useStore } from "../store";
+import { Button, Popover } from "../ui";
 
 type Pt = [number, number];
 
@@ -15,9 +25,12 @@ const SNAP = 6;
 /** Extra reach around a band for clicks, in screen pixels. */
 const REACH = 4;
 const HANDLE = 6;
+/** A press that moves less than this is a click, in screen pixels. */
+const CLICK = 3;
 
 /** A placed section, ready to draw. */
 interface Placed {
+  key: string;
   device: AddedDevice;
   section: number;
   path: LightPath;
@@ -39,6 +52,7 @@ function placedSections(devices: readonly AddedDevice[]): Placed[] {
       if (!s.path) return [];
       return [
         {
+          key: `${device.id}-${k}`,
           device,
           section: k,
           path: s.path,
@@ -66,6 +80,11 @@ function useSize(ref: React.RefObject<HTMLElement | null>) {
   return size;
 }
 
+/** Keys typed into a field belong to the field. */
+const typing = (t: EventTarget | null) =>
+  t instanceof HTMLElement &&
+  (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName));
+
 /** The engine's small frame, scaled up with crisp pixels. */
 function ScreenImage() {
   const image = useScreen((s) => s.image);
@@ -89,7 +108,19 @@ function ScreenImage() {
 const line = (pts: readonly Pt[]) => pts.map((p) => p.join(",")).join(" ");
 
 /** A section's band, in its segments' colors, with its name at the start. */
-function Shape({ p, w, h, selected }: { p: Placed; w: number; h: number; selected: boolean }) {
+function Shape({
+  p,
+  w,
+  h,
+  selected,
+  hover,
+}: {
+  p: Placed;
+  w: number;
+  h: number;
+  selected: boolean;
+  hover: boolean;
+}) {
   const live = useLive((s) => s.paths[p.device.ip]);
   const px = p.path.points.map(([x, y]) => [x * w, y * h] as Pt);
   const loop = p.path.closed && px.length > 2 ? [...px, px[0] as Pt] : px;
@@ -104,6 +135,7 @@ function Shape({ p, w, h, selected }: { p: Placed; w: number; h: number; selecte
     <g
       className="shape"
       data-selected={selected || undefined}
+      data-hover={hover || undefined}
       data-off={p.device.on ? undefined : ""}
     >
       {px.length > 1 && (
@@ -129,6 +161,66 @@ function Shape({ p, w, h, selected }: { p: Placed; w: number; h: number; selecte
   );
 }
 
+const SHORTCUTS: [string, string][] = [
+  ["Click a band", "Select a light"],
+  ["Drag a band", "Move it (Shift: straight across or up)"],
+  ["Click a point", "Pick it"],
+  ["Shift+click a point", "Add it to the picked points, or take it out"],
+  ["Drag on empty space", "Pick the points in a box (Shift: add to them)"],
+  ["Drag a point", "Move the picked points (Shift: 0/45/90°)"],
+  ["Double-click the band", "Add a point there"],
+  ["Ctrl+click", "Add a point after the last one"],
+  ["Delete, right-click", "Remove points"],
+  ["Arrows", "Nudge the picked points (Shift: further)"],
+  ["Ctrl+A", "Pick every point"],
+  ["Esc", "Unpick points, then the light"],
+  ["Alt", "Hold to turn off snapping"],
+  ["Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"],
+  [
+    "While drawing",
+    "Backspace: undo a point. Click the first point: close the loop. Double-click or Enter: done.",
+  ],
+];
+
+/** Undo, redo, and the list of shortcuts. */
+function Toolbar() {
+  const canUndo = useStore((s) => s.past.length > 0 && !s.drawing);
+  const canRedo = useStore((s) => s.future.length > 0 && !s.drawing);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  return (
+    <div className="canvas-bar">
+      <Button variant="ghost" size="sm" disabled={!canUndo} onClick={undo}>
+        Undo
+      </Button>
+      <Button variant="ghost" size="sm" disabled={!canRedo} onClick={redo}>
+        Redo
+      </Button>
+      <Popover.Root>
+        <Popover.Trigger render={<Button variant="ghost" size="sm" />}>Shortcuts</Popover.Trigger>
+        <Popover.Popup className="shortcuts" side="bottom" align="end">
+          <Popover.Title>Placing lights</Popover.Title>
+          <dl>
+            {SHORTCUTS.map(([keys, what]) => (
+              <div key={keys}>
+                <dt>{keys}</dt>
+                <dd>{what}</dd>
+              </div>
+            ))}
+          </dl>
+        </Popover.Popup>
+      </Popover.Root>
+    </div>
+  );
+}
+
+type Drag =
+  /** Moving the picked points; `grab` is the one under the pointer. */
+  | { kind: "points"; grab: number; indices: number[]; from: Pt; orig: LightPath }
+  | { kind: "move"; from: Pt; orig: LightPath }
+  /** Picking points in a box, on top of `base`. */
+  | { kind: "box"; from: Pt; to: Pt; base: number[] };
+
 /**
  * The screen, with every placed light section on it. Click a band to select
  * it; drag it to move it, drag its points to reshape it.
@@ -137,58 +229,107 @@ export function Canvas() {
   const devices = useStore((s) => s.devices);
   const selection = useStore((s) => s.selection);
   const drawing = useStore((s) => s.drawing);
+  const points = useStore((s) => s.points);
   const select = useStore((s) => s.select);
+  const setPoints = useStore((s) => s.setPoints);
   const setDrawing = useStore((s) => s.setDrawing);
   const setSectionPath = useStore((s) => s.setSectionPath);
+  const breakUndo = useStore((s) => s.breakUndo);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
   const image = useScreen((s) => s.image) ?? FALLBACK;
   const box = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const { w, h } = useSize(box);
-  const [drag, setDrag] = useState<
-    { kind: "point"; index: number } | { kind: "move"; from: Pt; orig: LightPath } | null
-  >(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const [guides, setGuides] = useState<Guides>({});
   const [cursor, setCursor] = useState<Pt | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  /** A handle is being pressed, so its focus isn't from the keyboard. */
+  const pressing = useRef(false);
 
   const placed = placedSections(devices);
   const current = placed.find(
     (p) => p.device.id === selection?.id && p.section === selection.section,
   );
-  const selectedDevice = devices.find((d) => d.id === selection?.id);
   // In drawing mode the selected section may still have no points.
   const editing: LightPath | undefined =
     current?.path ??
-    (drawing && selectedDevice && selection
-      ? { points: [], width: 0.12, closed: false }
-      : undefined);
+    (drawing && selection ? { points: [], width: 0.12, closed: false } : undefined);
+  const picked = points.filter((i) => i < (editing?.points.length ?? 0));
   const update = (path: LightPath) => {
     if (selection) setSectionPath(selection.id, selection.section, path);
   };
 
-  // Enter or Escape ends drawing.
+  // Latest values for the window key handler.
+  const live = useRef({ editing, picked, drawing, update, w, h });
+  live.current = { editing, picked, drawing, update, w, h };
+
   useEffect(() => {
-    if (!drawing) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" || e.key === "Escape") {
-        setDrawing(false);
-        setCursor(null);
-        setGuides({});
+      if (typing(e.target)) return;
+      const { editing, picked, drawing, update, w, h } = live.current;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (drawing) {
+        if (e.key === "Enter" || e.key === "Escape") {
+          setDrawing(false);
+          setCursor(null);
+          setGuides({});
+        } else if ((e.key === "Backspace" || (ctrl && key === "z")) && editing) {
+          e.preventDefault();
+          update({ ...editing, points: editing.points.slice(0, -1) });
+        }
+        return;
+      }
+      if (ctrl && (key === "y" || (key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (ctrl && key === "z") {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (!editing) return;
+      if (ctrl && key === "a") {
+        e.preventDefault();
+        setPoints(editing.points.map((_, i) => i));
+      } else if ((e.key === "Delete" || e.key === "Backspace") && picked.length) {
+        e.preventDefault();
+        breakUndo();
+        update(removePoints(editing, picked));
+        setPoints([]);
+      } else if (e.key === "Escape") {
+        if (picked.length) setPoints([]);
+        else select(null);
+      } else if (e.key.startsWith("Arrow") && picked.length) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1;
+        const d: Record<string, Pt> = {
+          ArrowLeft: [-step / w, 0],
+          ArrowRight: [step / w, 0],
+          ArrowUp: [0, -step / h],
+          ArrowDown: [0, step / h],
+        };
+        update(movePoints(editing, picked, d[e.key] ?? [0, 0]));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawing, setDrawing]);
+  }, [setDrawing, setPoints, select, breakUndo, undo, redo]);
 
   const at = (e: React.PointerEvent | React.MouseEvent): Pt => {
     const r = (svg.current as SVGSVGElement).getBoundingClientRect();
     return clampPoint([(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]);
   };
-  /** Every point on screen except `skip` of the edited path, to snap to. */
-  const targets = (skip: number): Pt[] => [
+  /** Every point on screen but `skip` of the edited path, to snap to. */
+  const targets = (skip: readonly number[]): Pt[] => [
     ...placed.filter((p) => p !== current).flatMap((p) => p.path.points),
-    ...(editing?.points.filter((_, i) => i !== skip) ?? []),
+    ...(editing?.points.filter((_, i) => !skip.includes(i)) ?? []),
   ];
-  const snap = (e: React.PointerEvent, from: Pt | undefined, skip: number) => {
+  const snap = (e: React.PointerEvent, from: Pt | undefined, skip: readonly number[]) => {
     const r = snapPoint(at(e), {
       from,
       shift: e.shiftKey,
@@ -207,66 +348,125 @@ export function Canvas() {
     if (i > 0) return path.points[i - 1];
     return path.closed && n > 2 ? path.points[n - 1] : path.points[1];
   };
+  const hitTest = (p: Pt) => {
+    const hit = (x: Placed) => distanceTo(x.path, p, w, h) <= REACH;
+    return current && hit(current) ? current : [...placed].reverse().find(hit);
+  };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
+    const pts = editing?.points ?? [];
     if (drawing && editing) {
-      const pts = editing.points;
-      update({ ...editing, points: [...pts, snap(e, pts[pts.length - 1], -1)] });
+      update({ ...editing, points: [...pts, snap(e, pts[pts.length - 1], [])] });
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && editing) {
+      breakUndo();
+      update({ ...editing, points: [...pts, snap(e, pts[pts.length - 1], [])] });
+      setPoints([pts.length]);
       return;
     }
     const p = at(e);
-    const hit = (x: Placed) => distanceTo(x.path, p, w, h) <= REACH;
-    const target = current && hit(current) ? current : [...placed].reverse().find(hit);
-    if (!target) {
-      select(null);
-      return;
-    }
-    if (target !== current) select({ id: target.device.id, section: target.section });
+    const target = hitTest(p);
     svg.current?.setPointerCapture(e.pointerId);
-    setDrag({ kind: "move", from: p, orig: target.path });
+    if (target) {
+      if (target !== current) select({ id: target.device.id, section: target.section });
+      setDrag({ kind: "move", from: p, orig: target.path });
+    } else if (editing) {
+      setDrag({ kind: "box", from: p, to: p, base: e.shiftKey ? picked : [] });
+    } else {
+      select(null);
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
     if (drawing && editing) {
       const pts = editing.points;
-      setCursor(snap(e, pts[pts.length - 1], -1));
+      setCursor(snap(e, pts[pts.length - 1], []));
       return;
     }
-    if (!drag || !editing || !selection) return;
-    if (drag.kind === "point") {
-      const q = snap(e, neighbor(editing, drag.index), drag.index);
-      update({ ...editing, points: editing.points.map((p, i) => (i === drag.index ? q : p)) });
+    if (!drag) {
+      const key = hitTest(at(e))?.key ?? null;
+      if (key !== hover) setHover(key);
+      return;
+    }
+    const p = at(e);
+    const delta: Pt = [p[0] - drag.from[0], p[1] - drag.from[1]];
+    if (drag.kind === "box") {
+      setDrag({ ...drag, to: p });
+    } else if (drag.kind === "points") {
+      if (drag.indices.length === 1) {
+        // One point: Shift keeps its leg at 0/45/90 degrees.
+        const q = snap(e, neighbor(drag.orig, drag.grab), drag.indices);
+        update({ ...drag.orig, points: drag.orig.points.map((o, i) => (i === drag.grab ? q : o)) });
+      } else {
+        const r = snapMove(
+          drag.orig.points.filter((_, i) => drag.indices.includes(i)),
+          delta,
+          { shift: e.shiftKey, guides: !e.altKey, targets: targets(drag.indices), w, h, tol: SNAP },
+        );
+        setGuides(r.guides);
+        update(movePoints(drag.orig, drag.indices, r.delta));
+      }
     } else {
-      const p = at(e);
-      update(movePath(drag.orig, [p[0] - drag.from[0], p[1] - drag.from[1]]));
+      const others = placed.filter((x) => x !== current).flatMap((x) => x.path.points);
+      const r = snapMove(drag.orig.points, delta, {
+        shift: e.shiftKey,
+        guides: !e.altKey,
+        targets: others,
+        w,
+        h,
+        tol: SNAP,
+      });
+      setGuides(r.guides);
+      update(movePath(drag.orig, r.delta));
     }
   };
 
   const endDrag = () => {
+    if (drag?.kind === "box" && editing) {
+      const moved = Math.hypot((drag.to[0] - drag.from[0]) * w, (drag.to[1] - drag.from[1]) * h);
+      if (moved < CLICK) {
+        // A click on empty space.
+        if (drag.base.length === 0) select(null);
+      } else {
+        setPoints([...new Set([...drag.base, ...pointsIn(editing, drag.from, drag.to)])]);
+      }
+    }
     setDrag(null);
     setGuides({});
+    breakUndo();
+    pressing.current = false;
+  };
+
+  const onHandleDown = (i: number, e: React.PointerEvent) => {
+    pressing.current = true;
+    if (e.button !== 0 || !editing) return;
+    e.stopPropagation();
+    if (drawing) {
+      // Clicking the first point closes the loop.
+      if (i === 0 && editing.points.length > 2) {
+        update({ ...editing, closed: true });
+        setDrawing(false);
+        setCursor(null);
+      }
+      return;
+    }
+    if (e.shiftKey) {
+      setPoints(picked.includes(i) ? picked.filter((j) => j !== i) : [...picked, i]);
+      return;
+    }
+    const indices = picked.includes(i) ? picked : [i];
+    if (!picked.includes(i)) setPoints([i]);
+    svg.current?.setPointerCapture(e.pointerId);
+    setDrag({ kind: "points", grab: i, indices, from: at(e), orig: editing });
   };
 
   const removePoint = (i: number) => {
-    if (editing) update({ ...editing, points: editing.points.filter((_, j) => j !== i) });
-  };
-
-  const nudge = (i: number, e: React.KeyboardEvent) => {
-    const step = (e.shiftKey ? 10 : 1) / Math.max(w, 1);
-    const d: Record<string, Pt> = {
-      ArrowLeft: [-step, 0],
-      ArrowRight: [step, 0],
-      ArrowUp: [0, (-step * w) / Math.max(h, 1)],
-      ArrowDown: [0, (step * w) / Math.max(h, 1)],
-    };
-    const [dx, dy] = d[e.key] ?? [0, 0];
-    if (!editing || (dx === 0 && dy === 0)) return;
-    e.preventDefault();
-    update({
-      ...editing,
-      points: editing.points.map((p, j) => (j === i ? clampPoint([p[0] + dx, p[1] + dy]) : p)),
-    });
+    if (!editing) return;
+    breakUndo();
+    update(removePoints(editing, picked.includes(i) ? picked : [i]));
+    setPoints([]);
   };
 
   const px = (editing?.points ?? []).map(([x, y]) => [x * w, y * h] as Pt);
@@ -274,9 +474,26 @@ export function Canvas() {
   const count = current?.sources.length ?? 1;
   const pieces = splitPath(px, !!editing?.closed, count);
   const last = px[px.length - 1];
+  const boxRect =
+    drag?.kind === "box"
+      ? {
+          x: Math.min(drag.from[0], drag.to[0]) * w,
+          y: Math.min(drag.from[1], drag.to[1]) * h,
+          width: Math.abs(drag.to[0] - drag.from[0]) * w,
+          height: Math.abs(drag.to[1] - drag.from[1]) * h,
+        }
+      : null;
+  const pointer = drawing
+    ? "draw"
+    : drag?.kind === "move" || drag?.kind === "points"
+      ? "grabbing"
+      : hover
+        ? "move"
+        : undefined;
 
   return (
     <section className="canvas" aria-label="Screen">
+      <Toolbar />
       <div className="canvas-fit">
         <div
           ref={box}
@@ -287,7 +504,7 @@ export function Canvas() {
               "--aspect": image.width / image.height,
             } as React.CSSProperties
           }
-          data-drawing={drawing || undefined}
+          data-pointer={pointer}
         >
           <ScreenImage />
           <svg
@@ -300,26 +517,41 @@ export function Canvas() {
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
-            onPointerLeave={() => drawing && setCursor(null)}
+            onPointerLeave={() => {
+              if (drawing) setCursor(null);
+              setHover(null);
+            }}
             onDoubleClick={(e) => {
-              if (drawing || !editing) return;
+              if (!editing) return;
+              if (drawing) {
+                // The double-click's second press added a point on top of the first.
+                const [a, b] = editing.points.slice(-2);
+                const dup = a && b && Math.hypot((a[0] - b[0]) * w, (a[1] - b[1]) * h) < CLICK;
+                if (dup) update({ ...editing, points: editing.points.slice(0, -1) });
+                setDrawing(false);
+                setCursor(null);
+                return;
+              }
               const p = at(e);
               const i = insertIndex(editing, p, w, h);
               if (i >= 0) {
+                breakUndo();
                 update({
                   ...editing,
                   points: [...editing.points.slice(0, i), p, ...editing.points.slice(i)],
                 });
+                setPoints([i]);
               }
             }}
           >
             {placed.map((p) => (
               <Shape
-                key={`${p.device.id}-${p.section}`}
+                key={p.key}
                 p={p}
                 w={w}
                 h={h}
                 selected={p === current}
+                hover={p.key === hover && p !== current}
               />
             ))}
             {guides.x !== undefined && (
@@ -371,36 +603,36 @@ export function Canvas() {
                     role="button"
                     tabIndex={0}
                     aria-label={i === 0 ? "Point 1, start" : `Point ${i + 1}`}
+                    aria-pressed={picked.includes(i)}
                     data-start={i === 0 || undefined}
                     cx={x}
                     cy={y}
                     r={i === 0 ? HANDLE * 1.4 : HANDLE}
-                    onPointerDown={(e) => {
-                      if (e.button !== 0 || drawing) return;
-                      e.stopPropagation();
-                      svg.current?.setPointerCapture(e.pointerId);
-                      setDrag({ kind: "point", index: i });
+                    onPointerDown={(e) => onHandleDown(i, e)}
+                    onFocus={() => {
+                      // Tabbing to a point picks it.
+                      if (!pressing.current && !picked.includes(i)) setPoints([i]);
+                      pressing.current = false;
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       removePoint(i);
                     }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Delete" || e.key === "Backspace") removePoint(i);
-                      else nudge(i, e);
-                    }}
                   />
                 ))}
               </g>
             )}
+            {boxRect && <rect className="marquee" {...boxRect} />}
           </svg>
         </div>
       </div>
       <p className="canvas-hint meta">
         {drawing
-          ? "Click to add points from where the strip starts. Shift: straight lines. Alt: no guides. Enter: done."
+          ? "Click to add points from where the strip starts. Click the first point to close the loop. Double-click or Enter when done."
           : editing
-            ? "Drag the band to move it, or its points to reshape it. Double-click the band to add a point, right-click a point to remove it. Shift: straight, Alt: no guides."
+            ? picked.length
+              ? `${picked.length} ${picked.length === 1 ? "point" : "points"} picked. Drag to move, arrows to nudge, Delete to remove.`
+              : "Drag the band to move it. Click points to pick them, Shift+click or drag a box to pick more."
             : placed.length > 0
               ? "Click a light to edit it."
               : "Add a light to place it on the screen."}
