@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
+import { resolveCalibration } from "./lib/calibration";
 import { resolvePath } from "./lib/path";
 import type { GoveeDevice, LightPath } from "./lib/types";
 import { DEFAULT_SETTINGS, migrate, toEngineConfig, useStore } from "./store";
@@ -20,6 +21,7 @@ beforeEach(() => {
     selection: null,
     drawing: false,
     points: [],
+    calibrating: null,
     past: [],
     future: [],
   });
@@ -33,7 +35,12 @@ describe("lights off", () => {
     s.setEnabled(true);
     await useStore.getState().lightsOff();
     expect(useStore.getState().enabled).toBe(false);
+    expect(useStore.getState().devices.every((d) => !d.on)).toBe(true);
     expect(api.lightsOff).toHaveBeenCalledWith([lamp.ip, strip.ip]);
+    await useStore.getState().setAllPower(true);
+    expect(useStore.getState().devices.every((d) => d.on)).toBe(true);
+    expect(api.setPower).toHaveBeenCalledWith(lamp.ip, true);
+    expect(api.setPower).toHaveBeenCalledWith(strip.ip, true);
   });
 });
 
@@ -49,7 +56,38 @@ const path = {
 const engineDevice = () => toEngineConfig(useStore.getState()).devices[0];
 
 describe("devices", () => {
-  it("adds once, around the screen edge, and selects it", () => {
+  it("switches a section off without losing its colors, overrides, or placement", () => {
+    const s = useStore.getState();
+    s.addDevice(strip);
+    s.setRazer(strip.id, true);
+    s.setSegments(strip.id, 4);
+    s.splitSection(strip.id, 0);
+    s.setSectionPath(strip.id, 1, path);
+    s.setSegmentColors(strip.id, [2], "#ff0000");
+    const before = engineDevice();
+    s.setSectionPower(strip.id, 1, false);
+    expect(engineDevice()?.segments).toEqual(["path", "path", "#000000", "#000000"]);
+    expect(engineDevice()?.sections[1]?.path).toBeNull();
+    const saved = useStore.getState().devices[0];
+    expect(saved?.sections[1]).toMatchObject({ on: false, color: "path", path });
+    expect(saved?.segmentColors?.[2]).toBe("#ff0000");
+    s.setPower(strip.id, false);
+    s.setPower(strip.id, true);
+    expect(engineDevice()?.segments.slice(2)).toEqual(["#000000", "#000000"]);
+    s.setSectionPower(strip.id, 1, true);
+    expect(engineDevice()).toEqual(before);
+    s.undo();
+    expect(engineDevice()?.segments.slice(2)).toEqual(["#000000", "#000000"]);
+    s.splitSection(strip.id, 1);
+    expect(
+      useStore
+        .getState()
+        .devices[0]?.sections.slice(1)
+        .map((section) => section.on),
+    ).toEqual([false, false]);
+  });
+
+  it("adds once, across the screen's middle, and selects it", () => {
     const { addDevice } = useStore.getState();
     addDevice(lamp);
     addDevice(lamp);
@@ -57,8 +95,17 @@ describe("devices", () => {
     expect(devices).toHaveLength(1);
     expect(devices[0]).toMatchObject({ id: lamp.id, name: "H6199", brightness: 1, on: true });
     expect(devices[0]?.sections).toHaveLength(1);
-    expect(devices[0]?.sections[0]).toMatchObject({ color: "path", path: { closed: true } });
-    expect(selection).toEqual({ id: lamp.id, section: 0 });
+    expect(devices[0]?.sections[0]).toMatchObject({
+      color: "path",
+      path: {
+        points: [
+          [0, 0.5],
+          [1, 0.5],
+        ],
+        closed: false,
+      },
+    });
+    expect(selection).toEqual({ id: lamp.id, section: null });
   });
 
   it("switches a light off and back on", () => {
@@ -95,8 +142,22 @@ describe("sections", () => {
     s.addDevice(strip);
     s.setRazer(strip.id, true);
     s.setSegments(strip.id, 12);
+    s.select({ id: strip.id, section: 0 });
     return useStore.getState();
   };
+
+  it("keeps a custom name with its section through split and merge", () => {
+    const s = bars();
+    s.renameSection(strip.id, 0, "Top edge");
+    s.splitSection(strip.id, 0);
+    expect(useStore.getState().devices[0]?.sections.map((section) => section.name)).toEqual([
+      "Top edge",
+      undefined,
+    ]);
+    s.renameSection(strip.id, 1, "Bottom edge");
+    s.mergeSections(strip.id, 0);
+    expect(useStore.getState().devices[0]?.sections[0]?.name).toBe("Top edge");
+  });
 
   it("splits a light in two and places each part", () => {
     const s = bars();
@@ -107,7 +168,7 @@ describe("sections", () => {
     expect(d?.segments).toEqual(Array(12).fill("path"));
     expect(d?.sections.map((x) => x.count)).toEqual([6, 6]);
     expect(d?.sections[1]?.path).toEqual(path);
-    expect(d?.sections[0]?.path?.closed).toBe(true);
+    expect(d?.sections[0]?.path?.closed).toBe(false);
   });
 
   it("colors a section, and single segments", () => {
@@ -200,6 +261,7 @@ describe("settings", () => {
       enabled: true,
       fps: 30,
       monitor: 0,
+      canvas: "screen",
       tuning: DEFAULT_SETTINGS.tuning,
       devices: [
         {
@@ -208,9 +270,83 @@ describe("settings", () => {
           razer: false,
           segments: ["path"],
           sections: [{ path: resolvePath(saved(), 16 / 9), count: 1 }],
+          calibration: resolveCalibration(),
         },
       ],
     });
+  });
+});
+
+describe("calibration", () => {
+  const start = () => {
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.addDevice(strip);
+    s.startCalibration(lamp.id);
+  };
+
+  it("sends the step's test color, calibrated, even with sync off", () => {
+    start();
+    const s = useStore.getState();
+    s.setCalibration(lamp.id, "white", "#ffe0c0");
+    let cfg = toEngineConfig(useStore.getState());
+    expect(cfg.enabled).toBe(true);
+    // Sync is off: the other light is left alone.
+    expect(cfg.devices).toHaveLength(1);
+    expect(cfg.devices[0]?.segments).toEqual(["#ffffff"]);
+    expect(cfg.devices[0]?.sections).toEqual([{ path: null, count: 1 }]);
+    expect(cfg.devices[0]?.calibration.white).toEqual([255, 224, 192]);
+    s.updateCalibrating({ step: "gamma", raw: true });
+    cfg = toEngineConfig(useStore.getState());
+    expect(cfg.devices[0]?.segments).toEqual(["#404040"]);
+    expect(cfg.devices[0]?.calibration).toEqual(resolveCalibration());
+    s.stopCalibration();
+    cfg = toEngineConfig(useStore.getState());
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.devices).toHaveLength(2);
+    expect(cfg.devices[0]?.segments).toEqual(["path"]);
+    expect(cfg.devices[0]?.calibration.white).toEqual([255, 224, 192]);
+  });
+
+  it("darkens the other lights while syncing, and switches the light on", () => {
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.addDevice(strip);
+    s.setEnabled(true);
+    s.setPower(lamp.id, false);
+    s.startCalibration(lamp.id);
+    expect(useStore.getState().devices[0]?.on).toBe(true);
+    expect(api.setPower).toHaveBeenLastCalledWith(lamp.ip, true);
+    const devices = toEngineConfig(useStore.getState()).devices;
+    expect(devices.map((d) => [d.ip, d.segments])).toEqual([
+      [lamp.ip, ["#ffffff"]],
+      [strip.ip, ["#000000"]],
+    ]);
+  });
+
+  it("fills every segment in razer mode", () => {
+    start();
+    useStore.getState().setRazer(lamp.id, true);
+    useStore.getState().setSegments(lamp.id, 4);
+    expect(toEngineConfig(useStore.getState()).devices[0]?.segments).toEqual(
+      Array(4).fill("#ffffff"),
+    );
+  });
+
+  it("resets, and copies to lights of the same model", () => {
+    const twin: GoveeDevice = { ...lamp, id: "EE:FF", ip: "192.168.1.12" };
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.addDevice(twin);
+    s.addDevice(strip);
+    s.setCalibration(lamp.id, "gamma", 2);
+    s.copyCalibration(lamp.id);
+    const cal = () => useStore.getState().devices.map((d) => d.calibration);
+    expect(cal()).toEqual([{ gamma: 2 }, { gamma: 2 }, undefined]);
+    s.resetCalibration(lamp.id);
+    expect(cal()).toEqual([undefined, { gamma: 2 }, undefined]);
+    s.setCalibration(twin.id, "gamma", undefined);
+    expect(cal()[1]).toBeUndefined();
   });
 });
 
@@ -231,6 +367,49 @@ describe("fit", () => {
     const path = toEngineConfig(useStore.getState(), 2).devices[0]?.sections[0]?.path;
     expect(path?.points.map(([x]) => x)).toEqual([0, 1]);
     expect(path?.points.map(([, y]) => y)).toEqual([0.5, 0.5]);
+  });
+});
+
+describe("setup file", () => {
+  it("exports the lights and settings, and imports them in place of the current ones", async () => {
+    const s = useStore.getState();
+    s.addDevice(lamp);
+    s.renameDevice(lamp.id, "Desk");
+    s.setTuning({ saturation: 1.8 });
+    await useStore.getState().exportSetup();
+    const [name, text] = vi.mocked(api.exportSetup).mock.calls.at(-1) ?? [];
+    expect(name).toMatch(/\.json$/);
+
+    useStore.getState().removeDevice(lamp.id);
+    useStore.getState().addDevice(strip);
+    useStore.getState().resetTuning();
+    vi.mocked(api.importSetup).mockResolvedValueOnce(text ?? null);
+    expect(await useStore.getState().importSetup()).toBe(true);
+    const after = useStore.getState();
+    expect(after.devices.map((d) => [d.id, d.name])).toEqual([[lamp.id, "Desk"]]);
+    expect(after.settings.tuning.saturation).toBe(1.8);
+    expect(after.selection).toBeNull();
+    expect(after.past).toEqual([]);
+  });
+
+  it("keeps everything when cancelled or the file is bad", async () => {
+    useStore.getState().addDevice(lamp);
+    expect(await useStore.getState().importSetup()).toBe(false);
+    vi.mocked(api.importSetup).mockResolvedValueOnce("nope");
+    await expect(useStore.getState().importSetup()).rejects.toThrow("isn't a light setup");
+    expect(useStore.getState().devices).toHaveLength(1);
+  });
+
+  it("migrates old files", async () => {
+    const old = {
+      kind: "light-mini-setup",
+      version: 7,
+      devices: [],
+      settings: { fps: 30, monitor: 0, tuning: DEFAULT_SETTINGS.tuning },
+    };
+    vi.mocked(api.importSetup).mockResolvedValueOnce(JSON.stringify(old));
+    await useStore.getState().importSetup();
+    expect(useStore.getState().settings.canvas).toBe("screen");
   });
 });
 
@@ -283,6 +462,7 @@ describe("migrate from v6", () => {
     };
     const s = migrate(v6, 6);
     expect(s.settings.tuning).toEqual({ saturation: 1, brightness: 1, smoothing: 0.5 });
+    expect(s.settings.canvas).toBe("screen");
     const [top, red, strip3, old] = s.devices;
     expect(top?.sections).toEqual([
       {
@@ -341,6 +521,7 @@ describe("undo", () => {
   it("undoes a whole drawing at once, but not while drawing", () => {
     const s = useStore.getState();
     s.addDevice(strip);
+    s.select({ id: strip.id, section: 0 });
     const before = current();
     s.setDrawing(true);
     s.setSectionPath(strip.id, 0, { ...path, points: [[0.1, 0.1]] });
@@ -367,9 +548,14 @@ describe("undo", () => {
   it("clears picked points when the selection changes", () => {
     const s = useStore.getState();
     s.addDevice(strip);
+    s.select({ id: strip.id, section: 0 });
     s.setPoints([0, 1]);
     s.select({ id: strip.id, section: 0 });
     expect(useStore.getState().points).toEqual([0, 1]);
+    s.select({ id: strip.id, section: null });
+    expect(useStore.getState().points).toEqual([]);
+    s.setDrawing(true);
+    expect(useStore.getState().drawing).toBe(false);
     s.select(null);
     expect(useStore.getState().points).toEqual([]);
   });

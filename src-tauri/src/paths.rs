@@ -1,9 +1,9 @@
 //! Sampling paths: a line with a thickness, drawn over the screen, split along
 //! its length into one region per light segment.
 //!
-//! Each pixel within half the thickness of the path goes to the nearest point
-//! on it. How far along the path that point is picks the segment, so pixels at
-//! a corner count once, for the nearer leg. An open path's ends are cut square,
+//! Mitered bands share a diagonal at corners, including the outer corner pixels.
+//! Each leg's joined edges are split into segment regions, matching the preview.
+//! A pixel belongs to only one region. An open path's ends are cut square,
 //! the way it's drawn: nothing past its first or last point counts.
 //!
 //! Paths are drawn over the whole screen but laid over the picture: with
@@ -47,6 +47,10 @@ impl Geometry {
                 ]
             })
             .collect();
+        pts.dedup();
+        if p.closed && pts.len() > 1 && pts.first() == pts.last() {
+            pts.pop();
+        }
         let open = !(p.closed && pts.len() > 2);
         if !open {
             pts.push(pts[0]);
@@ -66,43 +70,74 @@ impl Geometry {
         self.lens.last().copied().unwrap_or(0.0)
     }
 
-    /// Squared distance from `c` to the path, how far along it the nearest
-    /// point is, and whether `c` is past one of its ends.
-    fn nearest(&self, c: [f32; 2]) -> (f32, f32, bool) {
-        let last = self.pts.len().saturating_sub(2);
-        match self.pts.len() {
-            0 => (f32::MAX, 0.0, false),
-            1 => (dist2(c, self.pts[0]), 0.0, false),
-            _ => self
-                .pts
-                .windows(2)
-                .zip(&self.lens)
-                .enumerate()
-                .map(|(i, (ab, &start))| {
-                    let (a, b) = (ab[0], ab[1]);
-                    let ab = [b[0] - a[0], b[1] - a[1]];
-                    let len2 = ab[0] * ab[0] + ab[1] * ab[1];
-                    let raw = if len2 > 0.0 {
-                        ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1]) / len2
-                    } else {
-                        0.0
-                    };
-                    let past = self.open && ((i == 0 && raw < 0.0) || (i == last && raw > 1.0));
-                    let u = raw.clamp(0.0, 1.0);
-                    let q = [a[0] + ab[0] * u, a[1] + ab[1] * u];
-                    (dist2(c, q), start + u * len2.sqrt(), past)
-                })
-                .fold(
-                    (f32::MAX, 0.0, false),
-                    |best, x| {
-                        if x.0 < best.0 {
-                            x
-                        } else {
-                            best
-                        }
-                    },
-                ),
+    /// Same joined quadrilaterals as `bandRegions` in the frontend.
+    fn regions(&self, r: f32, count: usize) -> Vec<(usize, [[f32; 2]; 4])> {
+        let n = self.pts.len() - usize::from(!self.open);
+        if n < 2 {
+            return Vec::new();
         }
+        let normal = |a: [f32; 2], b: [f32; 2]| {
+            let len = dist(a, b);
+            if len > 0.0 {
+                [-(b[1] - a[1]) / len, (b[0] - a[0]) / len]
+            } else {
+                [0.0, 0.0]
+            }
+        };
+        let offsets: Vec<[f32; 2]> = (0..n)
+            .map(|i| {
+                let before = if !self.open || i > 0 {
+                    Some(normal(self.pts[(i + n - 1) % n], self.pts[i]))
+                } else {
+                    None
+                };
+                let after = if !self.open || i < n - 1 {
+                    Some(normal(self.pts[i], self.pts[(i + 1) % n]))
+                } else {
+                    None
+                };
+                let a = before.or(after).unwrap_or([0.0, 1.0]);
+                let b = after.or(before).unwrap_or([0.0, 1.0]);
+                let sum = [a[0] + b[0], a[1] + b[1]];
+                let len = dist([0.0, 0.0], sum);
+                if len < 1e-6 {
+                    return [b[0] * r, b[1] * r];
+                }
+                let unit = [sum[0] / len, sum[1] / len];
+                let size = (r / (unit[0] * b[0] + unit[1] * b[1]).max(1e-6)).min(4.0 * r);
+                [unit[0] * size, unit[1] * size]
+            })
+            .collect();
+        let mut regions = Vec::new();
+        for i in 0..self.pts.len().saturating_sub(1) {
+            let j = (i + 1) % n;
+            let (a, b) = (self.pts[i], self.pts[i + 1]);
+            let length = self.lens[i + 1] - self.lens[i];
+            if length <= 0.0 {
+                continue;
+            }
+            let edge = |t: f32, side: f32| {
+                std::array::from_fn(|axis| {
+                    a[axis]
+                        + (b[axis] - a[axis]) * t
+                        + side * (offsets[i][axis] + (offsets[j][axis] - offsets[i][axis]) * t)
+                })
+            };
+            for segment in 0..count {
+                let from = self.lens[i].max(segment as f32 * self.total() / count as f32);
+                let to = self.lens[i + 1].min((segment + 1) as f32 * self.total() / count as f32);
+                if to <= from {
+                    continue;
+                }
+                let lo = (from - self.lens[i]) / length;
+                let hi = (to - self.lens[i]) / length;
+                regions.push((
+                    segment,
+                    [edge(lo, 1.0), edge(hi, 1.0), edge(hi, -1.0), edge(lo, -1.0)],
+                ));
+            }
+        }
+        regions
     }
 
     /// The point `at` along the path.
@@ -131,6 +166,19 @@ fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     dist2(a, b).sqrt()
 }
 
+fn contains(points: &[[f32; 2]; 4], c: [f32; 2]) -> bool {
+    let mut inside = false;
+    for i in 0..4 {
+        let (a, b) = (points[i], points[(i + 1) % 4]);
+        if (a[1] > c[1]) != (b[1] > c[1])
+            && c[0] < (b[0] - a[0]) * (c[1] - a[1]) / (b[1] - a[1]) + a[0]
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 /// Which pixels feed which segment, for one path, segment count, frame size
 /// and picture rect.
 pub struct PathSampler {
@@ -151,14 +199,14 @@ impl PathSampler {
         let total = g.total();
         // At least one pixel wide, so thin paths still hit something.
         let r = (p.width.max(0.0) * (rect.y1 - rect.y0) as f32 / 2.0).max(0.71);
+        let regions = g.regions(r, n);
         let mut pixels = Vec::new();
         let mut hit = vec![false; n];
         if !g.pts.is_empty() {
             for y in rect.y0..rect.y1 {
                 for x in rect.x0..rect.x1 {
-                    let (d2, at, past) = g.nearest([x as f32 + 0.5, y as f32 + 0.5]);
-                    if d2 <= r * r && !past {
-                        let s = segment_at(at, total, n);
+                    let c = [x as f32 + 0.5, y as f32 + 0.5];
+                    if let Some(&(s, _)) = regions.iter().find(|(_, points)| contains(points, c)) {
                         hit[s] = true;
                         pixels.push((x as u16, y as u16, s as u16));
                     }
@@ -199,13 +247,6 @@ impl PathSampler {
         out.clear();
         out.extend(self.acc.iter().map(|a| a.finish(t)));
     }
-}
-
-fn segment_at(at: f32, total: f32, n: usize) -> usize {
-    if total <= 0.0 {
-        return 0;
-    }
-    ((at / total * n as f32) as usize).min(n - 1)
 }
 
 #[cfg(test)]
@@ -318,10 +359,43 @@ mod tests {
         let xs: Vec<u16> = s.pixels.iter().map(|p| p.0).collect();
         assert_eq!(xs.iter().min(), Some(&20));
         assert_eq!(xs.iter().max(), Some(&79));
-        // A loop has no ends: its corners are round.
+        // A loop has no ends: its mitered corners extend past the centerline.
         let square = line(&[[0.3, 0.3], [0.7, 0.3], [0.7, 0.7], [0.3, 0.7]], 0.2, true);
         let s = PathSampler::new(&square, 1, w, h, full(w, h));
         assert!(s.pixels.iter().any(|p| p.0 < 30));
+    }
+
+    #[test]
+    fn square_corners_are_sampled_once_including_the_loop_seam() {
+        let p = line(&[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]], 0.4, true);
+        let mut sampler = PathSampler::new(&p, 4, 20, 20, full(20, 20));
+        let seen: std::collections::HashSet<_> =
+            sampler.pixels.iter().map(|p| (p.0, p.1)).collect();
+        assert_eq!(
+            seen.len(),
+            sampler.pixels.len(),
+            "no double counting at joins"
+        );
+        assert_eq!(seen.len(), 20 * 20 - 4 * 4);
+        for corner in [(0, 0), (19, 0), (19, 19), (0, 19)] {
+            assert!(seen.contains(&corner), "missing outer corner {corner:?}");
+        }
+        let regions = Geometry::new(&p, full(20, 20)).regions(4.0, 4);
+        let expected = [[8.0, 8.0], [12.0, 8.0], [20.0, 0.0], [0.0, 0.0]];
+        for (actual, expected) in regions[0].1.iter().flatten().zip(expected.iter().flatten()) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+        // Color only the extreme corners that rounded bands previously missed.
+        let data = frame_data(20, 20, |x, y| {
+            if !(2..18).contains(&x) && !(2..18).contains(&y) {
+                [255, 0, 0]
+            } else {
+                [0, 0, 0]
+            }
+        });
+        let mut out = Vec::new();
+        sampler.sample(&frame(&data, 20, 20), &NEUTRAL, &mut out);
+        assert!(out.iter().all(|c| c[0] > 0 && c[1] == 0 && c[2] == 0));
     }
 
     #[test]

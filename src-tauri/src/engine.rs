@@ -2,21 +2,21 @@
 
 use parking_lot::Mutex;
 use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
 
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine as _;
-
-use crate::capture::{CaptureError, Capturer};
+use crate::app_icon;
+use crate::calibration::Calibration;
+use crate::capture::{list_monitors, CaptureError, Capturer};
 use crate::color::{content_rect, Frame, Rect, Rgb, Smoother, Tuning};
 use crate::govee::{control_addr, Sender};
 use crate::paths::{PathConfig, PathSampler};
+use crate::preview::Preview;
+use crate::visuals::{canvas_size, phthalo, Canvas, Painter};
 
 /// Where a segment gets its color: its section's path, or fixed. From JSON as
 /// `"path"` or `"#rrggbb"`.
@@ -84,6 +84,9 @@ pub struct DeviceTarget {
     /// The segments in order, split into sections.
     #[serde(default)]
     pub sections: Vec<SectionConfig>,
+    /// Maps each color so the wall matches the screen.
+    #[serde(default)]
+    pub calibration: Calibration,
 }
 
 fn full() -> f32 {
@@ -96,6 +99,9 @@ pub struct EngineConfig {
     pub enabled: bool,
     pub fps: u32,
     pub monitor: u32,
+    /// What the lights follow: the screen, or a scene.
+    #[serde(default)]
+    pub canvas: Canvas,
     pub tuning: Tuning,
     pub devices: Vec<DeviceTarget>,
 }
@@ -106,37 +112,11 @@ impl Default for EngineConfig {
             enabled: false,
             fps: 30,
             monitor: 0,
+            canvas: Canvas::Screen,
             tuning: Tuning::default(),
             devices: Vec::new(),
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct EngineStatus {
-    pub running: bool,
-    pub error: Option<String>,
-}
-
-pub const EVENT_PATHS: &str = "paths";
-pub const EVENT_SCREEN: &str = "screen";
-pub const EVENT_STATUS: &str = "engine-status";
-
-/// One light's live path colors, one per segment, for the preview.
-#[derive(Clone, Serialize)]
-struct PathColors<'a> {
-    ip: &'a str,
-    colors: &'a [Rgb],
-}
-
-/// The small frame the engine samples, for drawing paths on.
-#[derive(Clone, Serialize)]
-struct ScreenImage {
-    width: usize,
-    height: usize,
-    /// RGB, row by row, base64.
-    rgb: String,
 }
 
 /// Resend unchanged colors this often, since UDP can drop packets.
@@ -152,6 +132,10 @@ const POWER_TRIES: u8 = 3;
 const MIN_DELTA: u8 = 2;
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(100);
 const SCREEN_INTERVAL: Duration = Duration::from_millis(250);
+/// Painted scenes move all the time, so their preview updates more often.
+const SCENE_INTERVAL: Duration = Duration::from_millis(100);
+/// How often the app icon follows the canvas.
+const ICON_INTERVAL: Duration = Duration::from_millis(250);
 
 struct Shared {
     config: Mutex<EngineConfig>,
@@ -159,7 +143,14 @@ struct Shared {
     stop: AtomicBool,
     /// The window is visible: send live colors and the screen image, and keep
     /// capturing even with sync off (for placing lights).
-    preview: AtomicBool,
+    previewing: AtomicBool,
+    /// The window just became visible and needs everything again, even if
+    /// nothing changed while it was hidden.
+    refresh: AtomicBool,
+    /// Status, live colors and the screen image, for the window to poll.
+    preview: Arc<Preview>,
+    /// A tiny canvas for the app icon while running.
+    icon: Arc<app_icon::Latest>,
     /// Lights the engine leaves alone until the given time (while identifying).
     held: Mutex<Vec<(SocketAddr, Instant)>>,
 }
@@ -176,7 +167,10 @@ impl Default for Engine {
                 config: Mutex::new(EngineConfig::default()),
                 generation: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
-                preview: AtomicBool::new(false),
+                previewing: AtomicBool::new(false),
+                refresh: AtomicBool::new(false),
+                preview: Arc::default(),
+                icon: Arc::default(),
                 held: Mutex::new(Vec::new()),
             }),
             thread: Mutex::new(None),
@@ -185,33 +179,70 @@ impl Default for Engine {
 }
 
 impl Engine {
-    pub fn apply(&self, app: &AppHandle, config: EngineConfig) {
+    pub fn apply(&self, config: EngineConfig) {
         *self.shared.config.lock() = config;
         self.shared.generation.fetch_add(1, Ordering::Release);
-        self.reconcile(app);
+        self.reconcile();
     }
 
     /// Send live colors and the screen image while the window is visible.
-    pub fn set_preview(&self, app: &AppHandle, on: bool) {
-        self.shared.preview.store(on, Ordering::Release);
-        self.reconcile(app);
+    pub fn set_preview(&self, on: bool) {
+        self.shared.previewing.store(on, Ordering::Release);
+        if on {
+            self.shared.refresh.store(true, Ordering::Release);
+        }
+        self.reconcile();
+    }
+
+    /// What the window polls for.
+    pub fn preview(&self) -> Arc<Preview> {
+        self.shared.preview.clone()
+    }
+
+    /// What the app icon shows.
+    pub fn icon(&self) -> Arc<app_icon::Latest> {
+        self.shared.icon.clone()
     }
 
     /// Run the thread while syncing or while the window shows the screen.
-    fn reconcile(&self, app: &AppHandle) {
-        let want = self.shared.config.lock().enabled || self.shared.preview.load(Ordering::Acquire);
+    ///
+    /// Called from commands, which run on the main thread, so it doesn't wait
+    /// for the thread to stop: that can take a tick, and would freeze the
+    /// window meanwhile. It only waits when turned back on before the old
+    /// thread is done, so two never run at once.
+    fn reconcile(&self) {
+        let want =
+            self.shared.config.lock().enabled || self.shared.previewing.load(Ordering::Acquire);
         let mut thread = self.thread.lock();
-        if want && thread.as_ref().is_none_or(|t| t.is_finished()) {
-            self.shared.stop.store(false, Ordering::Release);
-            let shared = self.shared.clone();
-            let app = app.clone();
-            *thread = std::thread::Builder::new()
-                .name("ambient-engine".into())
-                .spawn(move || run(shared, app))
-                .ok();
-        } else if !want {
-            self.stop_locked(&mut thread);
+        if !want {
+            if thread.is_some() {
+                self.shared.stop.store(true, Ordering::Release);
+            }
+            return;
         }
+        let stopping = self.shared.stop.load(Ordering::Acquire);
+        if thread
+            .as_ref()
+            .is_some_and(|t| !t.is_finished() && !stopping)
+        {
+            return;
+        }
+        self.stop_locked(&mut thread);
+        self.shared.stop.store(false, Ordering::Release);
+        let shared = self.shared.clone();
+        *thread = std::thread::Builder::new()
+            .name("ambient-engine".into())
+            .spawn(move || run(shared))
+            .ok();
+    }
+
+    #[cfg(test)]
+    fn running(&self) -> bool {
+        self.thread
+            .lock()
+            .as_ref()
+            .is_some_and(|t| !t.is_finished())
+            && !self.shared.stop.load(Ordering::Acquire)
     }
 
     /// Stop sending to `addr` for `d`, then resend its color.
@@ -239,6 +270,7 @@ struct Target {
     ip: String,
     /// One per segment.
     sources: Vec<Source>,
+    calibration: Calibration,
     brightness: f32,
     /// Streams in razer mode.
     razer: bool,
@@ -331,6 +363,7 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
                 addr,
                 ip: d.ip.clone(),
                 sources: d.segments.clone(),
+                calibration: d.calibration,
                 brightness: d.brightness.max(0.0),
                 razer: d.razer,
                 streaming: false,
@@ -373,8 +406,17 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
         .collect()
 }
 
+/// What to send for `c`: calibrated, then scaled by the light's brightness.
+fn output(t: &Target, c: Rgb) -> Rgb {
+    scale(t.calibration.apply(c), t.brightness)
+}
+
+/// `c` times `k`. Past full, the channels come down together, so the color
+/// keeps its balance: clamping each one would turn a calibrated white plain.
 fn scale(c: Rgb, k: f32) -> Rgb {
-    c.map(|v| (v as f32 * k).clamp(0.0, 255.0).round() as u8)
+    let max = c.iter().copied().max().unwrap_or(0) as f32;
+    let k = k.max(0.0).min(if max > 0.0 { 255.0 / max } else { 0.0 });
+    c.map(|v| (v as f32 * k).round().min(255.0) as u8)
 }
 
 fn changed(a: Rgb, b: Rgb) -> bool {
@@ -402,8 +444,8 @@ fn lower_thread_priority() {
 #[cfg(not(windows))]
 fn lower_thread_priority() {}
 
-/// The latest captured frame, tightly packed. Paths and the screen image both
-/// read it, and paths can be resampled from it after an edit even
+/// The latest frame, captured or painted, tightly packed. Paths and the screen
+/// image both read it, and paths can be resampled from it after an edit even
 /// when the screen is still (and no new frames arrive).
 #[derive(Default)]
 struct FrameCache {
@@ -432,34 +474,12 @@ impl FrameCache {
             stride: self.width * 4,
         })
     }
-
-    fn image(&self) -> ScreenImage {
-        let rgb: Vec<u8> = self
-            .data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|p| [p[2], p[1], p[0]])
-            .collect();
-        ScreenImage {
-            width: self.width,
-            height: self.height,
-            rgb: BASE64.encode(rgb),
-        }
-    }
 }
 
-fn run(shared: Arc<Shared>, app: AppHandle) {
+fn run(shared: Arc<Shared>) {
     lower_thread_priority();
-    let emit_status = |error: Option<String>| {
-        let _ = app.emit(
-            EVENT_STATUS,
-            EngineStatus {
-                running: error.is_none(),
-                error,
-            },
-        );
-    };
+    let emit_status =
+        |error: Option<String>| shared.preview.set_status(error.is_none(), error.as_deref());
 
     let mut sender = match Sender::new() {
         Ok(s) => s,
@@ -472,12 +492,20 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     let mut capturer: Option<Capturer> = None;
     let mut monitor = u32::MAX;
     let mut last_error: Option<String> = None;
+    // The screen as captured, and the canvas painted from it or from scratch.
     let mut cache = FrameCache::default();
+    let mut painted = FrameCache::default();
+    let mut painter = Painter::default();
+    let mut canvas = Canvas::Screen;
+    let mut size = (0, 0);
+    let start = Instant::now();
     let mut rect: Option<Rect> = None;
     let mut last_tick = Instant::now();
     let mut last_preview = Instant::now() - PREVIEW_INTERVAL;
     let mut last_screen = Instant::now() - SCREEN_INTERVAL;
     let mut screen_dirty = false;
+    let mut last_icon = Instant::now() - ICON_INTERVAL;
+    let mut icon_dirty = true;
     let mut segment_colors: Vec<Rgb> = Vec::new();
 
     emit_status(None);
@@ -508,14 +536,32 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 }
             }
             targets = new;
-            if cfg.monitor != monitor {
+            if cfg.monitor != monitor || cfg.canvas != canvas {
                 monitor = cfg.monitor;
+                canvas = cfg.canvas;
                 capturer = None;
+                // Painted canvases take the monitor's shape, so paths land
+                // where they do on the screen.
+                let aspect = list_monitors()
+                    .iter()
+                    .find(|m| m.index == monitor)
+                    .map_or(16.0 / 9.0, |m| m.width as f32 / m.height.max(1) as f32);
+                size = canvas_size(aspect);
+                painted = FrameCache::default();
+                rect = None;
+                if !canvas.uses_screen() {
+                    // Don't hold on to a stale picture while the screen is off.
+                    cache = FrameCache::default();
+                    if last_error.take().is_some() {
+                        emit_status(None);
+                    }
+                }
+                screen_dirty = true;
             }
         }
         let frame_time = Duration::from_secs_f32(1.0 / cfg.fps.clamp(5, 60) as f32);
 
-        if capturer.is_none() {
+        if capturer.is_none() && canvas.uses_screen() {
             match Capturer::new(monitor) {
                 Ok(c) => {
                     capturer = Some(c);
@@ -547,12 +593,38 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 }
             }
         }
-        if let Some(f) = cache.frame() {
-            // Only fresh frames can move the bars.
-            let r = match rect {
-                Some(r) if !fresh => r,
-                _ => *rect.insert(content_rect(&f)),
-            };
+        // Only fresh frames can move the bars.
+        if fresh || rect.is_none() {
+            rect = cache.frame().map(|f| content_rect(&f));
+        }
+        match canvas {
+            Canvas::Screen => {}
+            Canvas::Phthalo => {
+                if let (true, Some(f)) = (fresh || resample, cache.frame()) {
+                    phthalo(&f, &mut painted.data);
+                    (painted.width, painted.height) = (f.width, f.height);
+                }
+            }
+            scene => {
+                let t = start.elapsed().as_secs_f32();
+                painter.paint(scene, t, size.0, size.1, &mut painted.data);
+                (painted.width, painted.height) = size;
+                // Scenes have no bars.
+                rect = Some(Rect {
+                    x0: 0,
+                    y0: 0,
+                    x1: size.0,
+                    y1: size.1,
+                });
+                fresh = true;
+            }
+        }
+        let shown = if canvas == Canvas::Screen {
+            &cache
+        } else {
+            &painted
+        };
+        if let (Some(f), Some(r)) = (shown.frame(), rect) {
             for t in &mut targets {
                 t.sample_paths(&f, r, &cfg.tuning, fresh || resample);
             }
@@ -594,7 +666,7 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                     t.sources
                         .iter()
                         .enumerate()
-                        .map(|(i, s)| scale(s.resolve(&t.path_colors, i), t.brightness)),
+                        .map(|(i, s)| output(t, s.resolve(&t.path_colors, i))),
                 );
                 // Every frame: there's no fade to hide gaps, and it keeps the
                 // stream alive.
@@ -606,7 +678,7 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
                 .sources
                 .first()
                 .map_or([0, 0, 0], |s| s.resolve(&t.path_colors, 0));
-            let c = scale(c, t.brightness);
+            let c = output(t, c);
             let due = t.last.is_none_or(|l| changed(l, c)) || t.sent_at.elapsed() >= KEEPALIVE;
             if due {
                 sender.color(t.addr, c);
@@ -615,26 +687,44 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
             }
         }
 
-        let preview = shared.preview.load(Ordering::Relaxed);
-        if preview && last_preview.elapsed() >= PREVIEW_INTERVAL {
+        // A window that just opened gets everything, even if nothing changed.
+        let refresh = shared.refresh.swap(false, Ordering::AcqRel);
+        let previewing = shared.previewing.load(Ordering::Acquire);
+        if previewing && (refresh || last_preview.elapsed() >= PREVIEW_INTERVAL) {
             last_preview = tick;
-            let paths: Vec<PathColors> = targets
-                .iter()
-                .filter(|t| t.has_paths())
-                .map(|t| PathColors {
-                    ip: &t.ip,
-                    colors: &t.path_colors,
-                })
-                .collect();
-            let _ = app.emit(EVENT_PATHS, paths);
+            // Only sent when a color changed.
+            shared.preview.set_paths(
+                targets
+                    .iter()
+                    .filter(|t| t.has_paths())
+                    .map(|t| (t.ip.as_str(), t.path_colors.as_slice())),
+                refresh,
+            );
         }
 
-        // The first frame counts as fresh, so a still screen still gets sent.
-        screen_dirty |= fresh;
-        if preview && screen_dirty && cache.width > 0 && last_screen.elapsed() >= SCREEN_INTERVAL {
+        screen_dirty |= fresh || refresh;
+        let interval = if canvas.uses_screen() {
+            SCREEN_INTERVAL
+        } else {
+            SCENE_INTERVAL
+        };
+        if previewing && screen_dirty && shown.width > 0 && last_screen.elapsed() >= interval {
             last_screen = tick;
             screen_dirty = false;
-            let _ = app.emit(EVENT_SCREEN, cache.image());
+            shared
+                .preview
+                .set_image(&shown.data, shown.width, shown.height);
+        }
+
+        icon_dirty |= fresh || resample;
+        if icon_dirty && shown.width > 0 && last_icon.elapsed() >= ICON_INTERVAL {
+            last_icon = tick;
+            icon_dirty = false;
+            shared.icon.set(Some(app_icon::thumbnail(
+                &shown.data,
+                shown.width,
+                shown.height,
+            )));
         }
 
         if let Some(rest) = frame_time.checked_sub(tick.elapsed()) {
@@ -645,13 +735,8 @@ fn run(shared: Arc<Shared>, app: AppHandle) {
     for addr in stopped_streams(&targets, &[]) {
         sender.razer_mode(addr, false);
     }
-    let _ = app.emit(
-        EVENT_STATUS,
-        EngineStatus {
-            running: false,
-            error: None,
-        },
-    );
+    shared.preview.set_status(false, None);
+    shared.icon.set(None);
 }
 
 fn sleep_while_running(shared: &Shared, d: Duration) {
@@ -687,6 +772,16 @@ mod tests {
     }
 
     #[test]
+    fn canvas_defaults_to_the_screen() {
+        let json = r#"{"enabled":true,"fps":30,"monitor":0,"tuning":{},"devices":[]}"#;
+        let c: EngineConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.canvas, Canvas::Screen);
+        let json = json.replace("\"monitor\"", "\"canvas\":\"forest\",\"monitor\"");
+        let c: EngineConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(c.canvas, Canvas::Forest);
+    }
+
+    #[test]
     fn old_depth_tuning_is_ignored() {
         let t: Tuning = serde_json::from_str(r#"{"depth":0.2,"smoothing":0.1}"#).unwrap();
         assert_eq!(t.smoothing, 0.1);
@@ -699,6 +794,7 @@ mod tests {
             razer: false,
             segments,
             sections: Vec::new(),
+            calibration: Calibration::default(),
         }
     }
 
@@ -917,8 +1013,51 @@ mod tests {
     #[test]
     fn per_light_brightness_scales_and_clamps() {
         assert_eq!(scale([200, 100, 0], 0.5), [100, 50, 0]);
-        assert_eq!(scale([200, 100, 0], 1.5), [255, 150, 0]);
+        // Past full, the balance holds.
+        assert_eq!(scale([200, 100, 0], 1.5), [255, 128, 0]);
+        assert_eq!(scale([255, 255, 200], 1.25), [255, 255, 200]);
+        assert_eq!(scale([100, 100, 80], 1.25), [125, 125, 100]);
         assert_eq!(scale([200, 100, 0], 0.0), [0, 0, 0]);
+        assert_eq!(scale([0, 0, 0], 1.5), [0, 0, 0]);
+    }
+
+    #[test]
+    fn colors_are_calibrated_before_brightness() {
+        let json = r##"{"enabled":true,"fps":30,"monitor":0,"tuning":{},
+            "devices":[{"ip":"10.0.0.2","segments":["#ffffff"],"brightness":0.5,
+                "calibration":{"gamma":1,"white":[200,180,160]}}]}"##;
+        let cfg: EngineConfig = serde_json::from_str(json).unwrap();
+        let t = build_targets(&cfg, &mut []);
+        assert_eq!(output(&t[0], [255, 255, 255]), [100, 90, 80]);
+        assert_eq!(output(&t[0], [0, 0, 0]), [0, 0, 0]);
+    }
+
+    #[test]
+    fn stopping_does_not_wait_for_the_thread() {
+        let e = Engine::default();
+        // A painted scene: no capture needed. 5 fps: long sleeps between ticks.
+        let mut cfg = EngineConfig {
+            enabled: true,
+            fps: 5,
+            canvas: Canvas::Sea,
+            ..EngineConfig::default()
+        };
+        e.apply(cfg.clone());
+        assert!(e.running());
+        std::thread::sleep(Duration::from_millis(30));
+        cfg.enabled = false;
+        let t = Instant::now();
+        e.apply(cfg.clone());
+        assert!(t.elapsed() < Duration::from_millis(10), "{:?}", t.elapsed());
+        assert!(!e.running());
+        // Back on at once: waits for the old thread, then runs one new one.
+        cfg.enabled = true;
+        e.apply(cfg.clone());
+        assert!(e.running());
+        e.apply(cfg);
+        assert!(e.running(), "still the same one");
+        e.shutdown();
+        assert!(!e.running());
     }
 
     #[test]

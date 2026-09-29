@@ -1,12 +1,32 @@
 import { vi } from "vitest";
-import type { EngineStatus, Rgb, ScreenImage } from "../lib/types";
+import type { Preview } from "../lib/preview";
 
-/** Callbacks captured from the mocked event listeners. */
-export const listeners: {
-  paths?: (p: { ip: string; colors: Rgb[] }[]) => void;
-  screen?: (s: ScreenImage) => void;
-  status?: (s: EngineStatus) => void;
-} = {};
+let seq = 0;
+/** Messages no poll has taken yet, and polls waiting for one. */
+const queued: Preview[] = [];
+let waiting: ((p: Preview) => void)[] = [];
+
+/** Answer the app's preview poll, as the engine would. */
+export function sendPreview(msg: Omit<Preview, "seq">) {
+  const full = { ...msg, seq: ++seq };
+  const polls = waiting;
+  waiting = [];
+  if (polls.length === 0) queued.push(full);
+  for (const resolve of polls) resolve(full);
+}
+
+/** Forget messages and polls from earlier tests. */
+export function resetPreview() {
+  queued.length = 0;
+  waiting = [];
+}
+
+const nextPreview = (_after: number) =>
+  new Promise<Preview>((resolve) => {
+    const msg = queued.shift();
+    if (msg) resolve(msg);
+    else waiting.push(resolve);
+  });
 
 /** Mock for `src/lib/api`. Load it via dynamic import inside the `vi.mock` factory. */
 export function mockApiModule() {
@@ -19,23 +39,15 @@ export function mockApiModule() {
       identifyDevice: vi.fn(async () => {}),
       setPower: vi.fn(async () => {}),
       lightsOff: vi.fn(async () => {}),
-      onPaths: vi.fn(async (cb: (p: { ip: string; colors: Rgb[] }[]) => void) => {
-        listeners.paths = cb;
-        return () => {};
-      }),
-      onScreen: vi.fn(async (cb: (s: ScreenImage) => void) => {
-        listeners.screen = cb;
-        return () => {};
-      }),
-      onStatus: vi.fn(async (cb: (s: EngineStatus) => void) => {
-        listeners.status = cb;
-        return () => {};
-      }),
+      exportSetup: vi.fn(async (_name: string, _text: string) => true),
+      importSetup: vi.fn(async (): Promise<string | null> => null),
+      nextPreview: vi.fn(nextPreview),
       minimize: vi.fn(async () => {}),
       toggleMaximize: vi.fn(async () => {}),
       close: vi.fn(async () => {}),
       isMaximized: vi.fn(async () => false),
       onResized: vi.fn(async () => () => {}),
+      fullscreen: vi.fn(async () => async () => {}),
     },
   };
 }

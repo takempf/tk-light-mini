@@ -263,6 +263,17 @@ impl Sender {
         );
         let _ = self.sock.send_to(self.buf.as_bytes(), to);
     }
+
+    /// Whole-light white at a color temperature (`colorwc` with kelvin set).
+    #[cfg(test)]
+    pub fn color_temp(&mut self, to: SocketAddr, kelvin: u16) {
+        self.buf.clear();
+        let _ = write!(
+            self.buf,
+            r#"{{"msg":{{"cmd":"colorwc","data":{{"color":{{"r":0,"g":0,"b":0}},"colorTemInKelvin":{kelvin}}}}}}}"#
+        );
+        let _ = self.sock.send_to(self.buf.as_bytes(), to);
+    }
 }
 
 /// Hot pink: nothing in a typical scene looks like it.

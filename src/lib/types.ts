@@ -3,8 +3,8 @@ export type Rgb = [number, number, number];
 export type Hex = `#${string}`;
 
 /**
- * Where a segment gets its color: its section's path on screen ("path"), or a
- * fixed "#rrggbb".
+ * Where a segment gets its color: its section's path on the canvas ("path"),
+ * or a fixed "#rrggbb".
  */
 export type Source = "path" | Hex;
 
@@ -38,6 +38,10 @@ export interface LightPath {
  * segments in order, so a light with two bars can put one on each side.
  */
 export interface Section {
+  /** Optional display name. Missing or blank uses "Section n" for its position. */
+  name?: string;
+  /** Omitted means on. Off preserves the section's placement and colors. */
+  on?: boolean;
   /** Segments in it. The last section takes whatever is left. */
   count: number;
   color: Source;
@@ -49,8 +53,8 @@ export interface Section {
 export interface ScreenImage {
   width: number;
   height: number;
-  /** RGB, row by row. */
-  rgb: Uint8Array;
+  /** RGBA, row by row, ready for `ImageData`. */
+  rgba: Uint8ClampedArray<ArrayBuffer>;
 }
 
 export interface GoveeDevice {
@@ -73,7 +77,22 @@ export interface AddedDevice extends GoveeDevice {
   sections: Section[];
   /** Per-segment overrides. Missing or null = the section's color. */
   segmentColors?: (Source | null)[];
+  /** Color matching. Missing = none. */
+  calibration?: Calibration;
 }
+
+/** A corner of the color cube: a test color the wall is matched to. */
+export type Corner = "white" | "red" | "green" | "blue" | "yellow" | "cyan" | "magenta";
+
+/**
+ * What a light is sent in place of each test color, so the wall matches the
+ * screen, found by eye. Missing corners follow white (see `resolveCalibration`).
+ * `gamma` shapes the light's response: over 1 dims the middle. Missing = 1.
+ */
+export type Calibration = Partial<Record<Corner, Hex>> & { gamma?: number };
+
+/** A calibration with every corner filled in, for the engine. */
+export type ResolvedCalibration = Record<Corner, Rgb> & { gamma: number };
 
 /** Segment counts measured on real lights. */
 const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10, H6056: 12 };
@@ -87,9 +106,24 @@ export interface Tuning {
   smoothing: number;
 }
 
+/**
+ * What the lights follow: the screen, the screen through a filter, or a scene
+ * the engine paints.
+ */
+export type CanvasSource =
+  | "screen"
+  | "phthalo"
+  | "forest"
+  | "sunset"
+  | "aurora"
+  | "sea"
+  | "lava"
+  | "fire";
+
 export interface Settings {
   fps: number;
   monitor: number;
+  canvas: CanvasSource;
   tuning: Tuning;
 }
 
@@ -109,6 +143,7 @@ export interface EngineConfig {
   enabled: boolean;
   fps: number;
   monitor: number;
+  canvas: CanvasSource;
   tuning: Tuning;
   devices: {
     ip: string;
@@ -118,5 +153,6 @@ export interface EngineConfig {
     segments: Source[];
     /** In order. `path` is null when unplaced or when no segment follows it. */
     sections: { path: LightPath | null; count: number }[];
+    calibration: ResolvedCalibration;
   }[];
 }

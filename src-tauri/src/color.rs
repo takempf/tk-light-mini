@@ -65,7 +65,7 @@ fn srgb_to_linear_lut() -> &'static [f32; 256] {
     })
 }
 
-fn linear_to_srgb(c: f32) -> f32 {
+pub(crate) fn linear_to_srgb(c: f32) -> f32 {
     let c = c.clamp(0.0, 1.0);
     if c <= 0.003_130_8 {
         c * 12.92

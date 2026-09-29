@@ -5,9 +5,9 @@ export interface Swatch {
   label: string;
 }
 
-/** "Screen" follows the section's path; the rest are fixed. */
+/** "Canvas" follows the section's path on it; the rest are fixed. */
 export const SWATCHES: readonly Swatch[] = [
-  { source: "path", label: "Screen" },
+  { source: "path", label: "Canvas" },
   { source: "#ff0000", label: "Red" },
   { source: "#ff8000", label: "Orange" },
   { source: "#ffff00", label: "Yellow" },
@@ -19,7 +19,7 @@ export const SWATCHES: readonly Swatch[] = [
   { source: "#000000", label: "Off" },
 ];
 
-/** Follows the screen. */
+/** Follows the canvas. */
 export const isLive = (s: Source): s is "path" => s === "path";
 
 const LABELS = new Map(SWATCHES.map((s) => [s.source, s.label]));

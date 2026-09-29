@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandOffsets,
+  bandRegions,
+  directionMarks,
   distanceTo,
   edgeLoop,
   flipPath,
@@ -16,6 +19,118 @@ import {
   unresolvePath,
   zonePath,
 } from "./path";
+
+describe("section direction marks", () => {
+  it("spaces tailed equilateral arrows along long paths and alternates sides", () => {
+    const marks = directionMarks(
+      [
+        [0, 0],
+        [510, 0],
+      ],
+      false,
+    );
+    expect(marks).toHaveLength(2);
+    expect(marks.map(({ triangle }) => triangle.reduce((x, point) => x + point[0], 0) / 3)).toEqual(
+      [127.5, 382.5],
+    );
+    expect(marks.map(({ triangle }) => triangle.reduce((y, point) => y + point[1], 0) / 3)).toEqual(
+      [-12, 12],
+    );
+    for (const {
+      triangle: [tip, left, right],
+      tail: [back, front],
+    } of marks) {
+      expect(tip[0]).toBeGreaterThan(left[0]);
+      const length = (a: [number, number], b: [number, number]) =>
+        Math.hypot(a[0] - b[0], a[1] - b[1]);
+      expect(length(tip, left)).toBeCloseTo(8);
+      expect(length(left, right)).toBeCloseTo(8);
+      expect(length(right, tip)).toBeCloseTo(8);
+      expect(back[0]).toBeLessThan(front[0]);
+      expect(front[0]).toBeLessThan(tip[0]);
+      expect(length(back, front)).toBeCloseTo(7);
+    }
+  });
+
+  it("follows a closed loop without placing a triangle on a corner", () => {
+    const marks = directionMarks(
+      [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      true,
+    );
+    expect(marks).toHaveLength(2);
+    expect(marks[0]?.triangle[0][0]).toBeGreaterThan(90);
+    expect(marks[1]?.triangle[0][0]).toBeLessThan(10);
+  });
+});
+
+describe("corner sampling regions", () => {
+  const square: [number, number][] = [
+    [4, 4],
+    [16, 4],
+    [16, 16],
+    [4, 16],
+  ];
+
+  it("fills the outer corners and shares a diagonal between neighboring segments", () => {
+    const regions = bandRegions(square, true, 8, 4);
+    expect(regions).toHaveLength(4);
+    expect(regions[0]?.points).toEqual([
+      [8, 8],
+      [12, 8],
+      [20, 0],
+      [0, 0],
+    ]);
+    expect(regions[1]?.points).toEqual([
+      [12, 8],
+      [12, 12],
+      [20, 20],
+      [20, 0],
+    ]);
+    expect(regions[3]?.points).toContainEqual([0, 0]);
+    const path = {
+      points: square.map(([x, y]) => [x / 20, y / 20] as [number, number]),
+      width: 0.4,
+      closed: true,
+    };
+    expect(distanceTo(path, [0.025, 0.025], 20, 20)).toBe(0);
+    expect(distanceTo(path, [0.5, 0.5], 20, 20)).toBeGreaterThan(0);
+  });
+
+  it("keeps open ends flat and limits sharp corner spikes", () => {
+    expect(
+      bandRegions(
+        [
+          [4, 10],
+          [16, 10],
+        ],
+        false,
+        8,
+        1,
+      )[0]?.points,
+    ).toEqual([
+      [4, 14],
+      [16, 14],
+      [16, 6],
+      [4, 6],
+    ]);
+    for (const offset of bandOffsets(
+      [
+        [0, 0],
+        [10, 0],
+        [0, 0.01],
+      ],
+      false,
+      4,
+    )) {
+      expect(Math.hypot(...offset)).toBeLessThanOrEqual(16.000001);
+    }
+  });
+});
 
 describe("splitPath", () => {
   it("cuts a line into equal pieces", () => {

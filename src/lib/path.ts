@@ -2,6 +2,131 @@ import type { Fit, LightPath } from "./types";
 
 type Pt = [number, number];
 
+interface DirectionMark {
+  triangle: [Pt, Pt, Pt];
+  tail: [Pt, Pt];
+}
+
+/** Short arrows alternate sides along an ordered path, in screen pixels. */
+export function directionMarks(points: readonly Pt[], closed: boolean): DirectionMark[] {
+  const route = closed && points.length > 2 ? [...points, points[0] as Pt] : points;
+  const legs = route.slice(1).map((to, i) => {
+    const from = route[i] as Pt;
+    return { from, to, length: Math.hypot(to[0] - from[0], to[1] - from[1]) };
+  });
+  const total = legs.reduce((length, leg) => length + leg.length, 0);
+  if (total < 20) return [];
+  const count = Math.max(1, Math.round(total / 260));
+  const side = 8;
+  const tip = side / Math.sqrt(3);
+  const offset = 12;
+  const marks: DirectionMark[] = [];
+  for (let i = 0; i < count; i++) {
+    let remaining = (total * (i + 0.5)) / count;
+    for (const { from, to, length } of legs) {
+      if (length < 1) continue;
+      if (remaining > length) {
+        remaining -= length;
+        continue;
+      }
+      // Keep the triangle off vertices, especially on closed rectangular paths.
+      const inset = Math.min(11, length / 2);
+      const along = Math.min(Math.max(remaining, inset), length - inset);
+      const dx = (to[0] - from[0]) / length;
+      const dy = (to[1] - from[1]) / length;
+      const x = from[0] + dx * along;
+      const y = from[1] + dy * along;
+      const base = -tip / 2;
+      const sign = i % 2 === 0 ? -1 : 1;
+      const cx = x - dy * offset * sign;
+      const cy = y + dx * offset * sign;
+      marks.push({
+        triangle: [
+          [cx + dx * tip, cy + dy * tip],
+          [cx + dx * base - dy * (side / 2), cy + dy * base + dx * (side / 2)],
+          [cx + dx * base + dy * (side / 2), cy + dy * base - dx * (side / 2)],
+        ],
+        tail: [
+          [cx + dx * (base - 7), cy + dy * (base - 7)],
+          [cx + dx * base, cy + dy * base],
+        ],
+      });
+      break;
+    }
+  }
+  return marks;
+}
+
+/** Offset to the joined edge at each vertex; limit sharp turns to four half-widths. */
+export function bandOffsets(points: readonly Pt[], closed: boolean, r: number): Pt[] {
+  const n = points.length;
+  const loop = closed && n > 2;
+  const normal = (a: Pt, b: Pt): Pt => {
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy);
+    return length > 0 ? [-dy / length, dx / length] : [0, 0];
+  };
+  return points.map((p, i) => {
+    const before = loop || i > 0 ? normal(points[(i + n - 1) % n] as Pt, p) : undefined;
+    const after = loop || i < n - 1 ? normal(p, points[(i + 1) % n] as Pt) : undefined;
+    const a = before ?? after ?? [0, 1];
+    const b = after ?? before ?? [0, 1];
+    const sum: Pt = [a[0] + b[0], a[1] + b[1]];
+    const length = Math.hypot(...sum);
+    if (length < 1e-6) return [b[0] * r, b[1] * r];
+    const unit: Pt = [sum[0] / length, sum[1] / length];
+    const size = Math.min(r / Math.max(unit[0] * b[0] + unit[1] * b[1], 1e-6), 4 * r);
+    return [unit[0] * size, unit[1] * size];
+  });
+}
+
+/** Filled segment regions. Joined edges share a diagonal across each corner. */
+export function bandRegions(points: readonly Pt[], closed: boolean, width: number, count: number) {
+  points = points.filter(
+    (p, i) => i === 0 || p[0] !== points[i - 1]?.[0] || p[1] !== points[i - 1]?.[1],
+  );
+  if (
+    closed &&
+    points.length > 1 &&
+    points[0]?.[0] === points.at(-1)?.[0] &&
+    points[0]?.[1] === points.at(-1)?.[1]
+  ) {
+    points = points.slice(0, -1);
+  }
+  const offsets = bandOffsets(points, closed, width / 2);
+  const legs = closed && points.length > 2 ? points.length : points.length - 1;
+  const lengths = Array.from({ length: Math.max(0, legs) }, (_, i) => {
+    const a = points[i] as Pt,
+      b = points[(i + 1) % points.length] as Pt;
+    return Math.hypot(b[0] - a[0], b[1] - a[1]);
+  });
+  const total = lengths.reduce((a, b) => a + b, 0);
+  const regions: { segment: number; points: Pt[] }[] = [];
+  let start = 0;
+  lengths.forEach((length, i) => {
+    const j = (i + 1) % points.length;
+    const a = points[i] as Pt,
+      b = points[j] as Pt;
+    const oa = offsets[i] as Pt,
+      ob = offsets[j] as Pt;
+    const edge = (t: number, side: number): Pt => [
+      a[0] + (b[0] - a[0]) * t + side * (oa[0] + (ob[0] - oa[0]) * t),
+      a[1] + (b[1] - a[1]) * t + side * (oa[1] + (ob[1] - oa[1]) * t),
+    ];
+    for (let segment = 0; segment < count && length > 0; segment++) {
+      const from = Math.max(start, (segment * total) / count);
+      const to = Math.min(start + length, ((segment + 1) * total) / count);
+      if (to <= from) continue;
+      const lo = (from - start) / length,
+        hi = (to - start) / length;
+      regions.push({ segment, points: [edge(lo, 1), edge(hi, 1), edge(hi, -1), edge(lo, -1)] });
+    }
+    start += length;
+  });
+  return regions;
+}
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 export const clampPoint = ([x, y]: Pt): Pt => [clamp01(x), clamp01(y)];
@@ -67,11 +192,11 @@ export function reversePath(p: LightPath): LightPath {
   return { ...p, points };
 }
 
-/** A short line across the middle: where a light starts when placed by hand. */
+/** Default path: from the left edge to the right edge, halfway down the screen. */
 export const linePath = (width = 0.12): LightPath => ({
   points: [
-    [0.3, 0.5],
-    [0.7, 0.5],
+    [0, 0.5],
+    [1, 0.5],
   ],
   width,
   closed: false,
@@ -207,7 +332,33 @@ function nearestLeg(path: LightPath, p: Pt, w: number, h: number): { index: numb
 /** How far `p` is from the path's band, in pixels. 0 or less = on it. */
 export function distanceTo(path: LightPath, p: Pt, w: number, h: number): number {
   if (path.points.length === 0) return Number.POSITIVE_INFINITY;
-  return nearestLeg(path, p, w, h).d - Math.max((path.width * h) / 2, 1);
+  if (path.points.length === 1)
+    return nearestLeg(path, p, w, h).d - Math.max((path.width * h) / 2, 1);
+  const point: Pt = [p[0] * w, p[1] * h];
+  const regions = bandRegions(
+    path.points.map(([x, y]) => [x * w, y * h]),
+    path.closed,
+    Math.max(path.width * h, 2),
+    1,
+  );
+  let distance = Number.POSITIVE_INFINITY;
+  for (const region of regions) {
+    let inside = false;
+    region.points.forEach((a, i) => {
+      const b = region.points[(i + 1) % region.points.length] as Pt;
+      if (
+        a[1] > point[1] !== b[1] > point[1] &&
+        point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / (b[1] - a[1]) + a[0]
+      )
+        inside = !inside;
+      distance = Math.min(
+        distance,
+        nearestLeg({ ...path, points: [a, b], closed: false }, point, 1, 1).d,
+      );
+    });
+    if (inside) return 0;
+  }
+  return distance;
 }
 
 /**
@@ -241,19 +392,11 @@ interface FitMap {
 
 /**
  * How far the band reaches past each point on each axis, for points `pts` and
- * half thickness `r`. Corners are round, so they reach `r` every way. An open
+ * half thickness `r`. Corners follow the mitered join. An open
  * path's ends are cut square: they reach only across the line, not along it.
  */
 export function reach(pts: readonly Pt[], closed: boolean, r: number): Pt[] {
-  const n = pts.length;
-  const open = !(closed && n > 2);
-  return pts.map((_, i) => {
-    if (!open || n < 2 || (i > 0 && i < n - 1)) return [r, r];
-    const [a, b] = i === 0 ? [pts[0], pts[1]] : [pts[n - 2], pts[n - 1]];
-    const [dx, dy] = [(b as Pt)[0] - (a as Pt)[0], (b as Pt)[1] - (a as Pt)[1]];
-    const len = Math.hypot(dx, dy);
-    return len > 0 ? [(r * Math.abs(dy)) / len, (r * Math.abs(dx)) / len] : [r, r];
-  });
+  return bandOffsets(pts, closed, r).map(([x, y]) => [Math.abs(x), Math.abs(y)]);
 }
 
 /** Per axis in screen heights: placed = saved * s + t. */

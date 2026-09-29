@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import appIcon from "../../src-tauri/icons/32x32.png";
+import bigIcon from "../../src-tauri/icons/128x128.png";
 import { api } from "../lib/api";
-import { useStore } from "../store";
-import { Button, Logo, Switch } from "../ui";
-import { SettingsPopover } from "./SettingsPopover";
+import { flushSaves } from "../lib/storage";
+import { useScreen, useStore } from "../store";
+import { Switch } from "../ui";
 
 /** Windows caption glyphs, drawn on the same 16-unit grid as tk icons. */
 const GLYPHS = {
@@ -54,6 +56,83 @@ function useWindowFocused() {
   return focused;
 }
 
+function TitleToggle({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="titlebar-toggle">
+      <span className="titlebar-toggle-name">{label}</span>
+      <Switch aria-label={label} checked={checked} disabled={disabled} onCheckedChange={onChange}>
+        <span className="titlebar-toggle-state">{checked ? "On" : "Off"}</span>
+      </Switch>
+    </div>
+  );
+}
+
+/** CSS pixels, as in `.titlebar-icon`. */
+const ICON_SIZE = 24;
+/** The app icon's screen in `icons/icon.svg` (1024 wide): x, y, width, height, radius. */
+const SCREEN = [161, 213, 702, 486.2, 52] as const;
+
+let iconImage: Promise<HTMLImageElement> | undefined;
+const loadIcon = () => {
+  if (!iconImage) {
+    const img = new Image();
+    img.src = bigIcon;
+    iconImage = img.decode().then(() => img);
+  }
+  return iconImage;
+};
+
+/** The canvas on the app icon's screen, like the tray and taskbar icons. */
+function TitleIcon() {
+  const image = useScreen((s) => s.image);
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = image && canvas?.getContext("2d");
+    if (!image || !canvas || !ctx) return;
+    let live = true;
+    const frame = createImageBitmap(new ImageData(image.rgba, image.width, image.height));
+    void Promise.all([loadIcon(), frame]).then(([icon, bmp]) => {
+      if (live) {
+        const size = canvas.width;
+        const [x, y, w, h, r] = SCREEN.map((v) => (v * size) / 1024) as [
+          number,
+          number,
+          number,
+          number,
+          number,
+        ];
+        ctx.clearRect(0, 0, size, size);
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(icon, 0, 0, size, size);
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, r);
+        ctx.clip();
+        ctx.drawImage(bmp, x, y, w, h);
+        ctx.restore();
+      }
+      bmp.close();
+    });
+    return () => {
+      live = false;
+    };
+  }, [image]);
+  if (!image) return <img className="titlebar-icon" src={appIcon} alt="" />;
+  const px = Math.round(ICON_SIZE * window.devicePixelRatio);
+  return <canvas ref={ref} className="titlebar-icon" width={px} height={px} aria-hidden />;
+}
+
 /**
  * The app's own title bar, in place of the native one (decorations are off).
  * Empty space drags the window; double-clicking it maximizes. Only elements with
@@ -62,30 +141,26 @@ function useWindowFocused() {
 export function TitleBar() {
   const enabled = useStore((s) => s.enabled);
   const setEnabled = useStore((s) => s.setEnabled);
-  const lightsOff = useStore((s) => s.lightsOff);
+  const setAllPower = useStore((s) => s.setAllPower);
   const hasLights = useStore((s) => s.devices.length > 0);
+  const lightsOn = useStore((s) => s.devices.some((d) => d.on));
   const maximized = useMaximized();
   const focused = useWindowFocused();
 
   return (
     <header className="titlebar" data-tauri-drag-region data-focused={focused || undefined}>
       <div className="titlebar-brand">
-        <Logo label="" size="0.7em" />
+        <TitleIcon />
         <span>light mini</span>
       </div>
       <div className="titlebar-actions">
-        <SettingsPopover />
-        <Button
-          variant="ghost"
-          size="sm"
+        <TitleToggle
+          label="Lights"
+          checked={lightsOn}
           disabled={!hasLights}
-          onClick={() => lightsOff().catch((e) => console.error("lights_off", e))}
-        >
-          Lights off
-        </Button>
-        <Switch checked={enabled} onCheckedChange={setEnabled}>
-          {enabled ? "Syncing" : "Off"}
-        </Switch>
+          onChange={(on) => void setAllPower(on).catch((e) => console.error("set_all_power", e))}
+        />
+        <TitleToggle label="Syncing" checked={enabled} onChange={setEnabled} />
       </div>
       <div className="window-controls">
         <button type="button" aria-label="Minimize" onClick={() => api.minimize().catch(() => {})}>
@@ -102,7 +177,11 @@ export function TitleBar() {
           type="button"
           aria-label="Close"
           className="close"
-          onClick={() => api.close().catch(() => {})}
+          onClick={() => {
+            // Edits still settling would be lost.
+            flushSaves();
+            api.close().catch(() => {});
+          }}
         >
           <Glyph d={GLYPHS.close} />
         </button>

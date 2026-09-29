@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { css, hexRgb } from "../lib/colors";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { sectionStarts, sectionsOf, segmentSources } from "../lib/lights";
+import { useSegmentCss } from "../lib/live";
 import {
+  bandRegions,
   clampPoint,
+  directionMarks,
   distanceTo,
   insertIndex,
-  labelPoint,
   movePath,
   movePoints,
   pointsIn,
@@ -16,15 +17,15 @@ import {
   unresolvePath,
 } from "../lib/path";
 import { type Guides, snapMove, snapPoint } from "../lib/snap";
-import type { AddedDevice, LightPath, Rgb, Source } from "../lib/types";
+import type { AddedDevice, LightPath, Source } from "../lib/types";
 import { FIT, frameOf, panBy, type View, zoomAt } from "../lib/view";
-import { useLive, useScreen, useStore } from "../store";
+import { useScreen, useScreenAspect, useStore } from "../store";
 import { Button, Popover } from "../ui";
+import { BandFill } from "./BandFill";
+import { ShapeOutline } from "./ShapeOutline";
 
 type Pt = [number, number];
 
-/** Until the first frame arrives. */
-const FALLBACK = { width: 160, height: 90 };
 /** Snap distance, in screen pixels. */
 const SNAP = 6;
 /** Extra reach around a band for clicks, in screen pixels. */
@@ -48,7 +49,6 @@ interface Placed {
   start: number;
   /** One per segment in it. */
   sources: Source[];
-  label: string;
 }
 
 /** Every placed section, fitted to a screen `aspect` wide. */
@@ -57,7 +57,6 @@ function placedSections(devices: readonly AddedDevice[], aspect: number): Placed
     const sections = sectionsOf(device);
     const starts = sectionStarts(sections);
     const sources = segmentSources(device);
-    const name = device.name || device.sku;
     return sections.flatMap((s, k) => {
       const start = starts[k] as number;
       if (!s.path) return [];
@@ -70,11 +69,28 @@ function placedSections(devices: readonly AddedDevice[], aspect: number): Placed
           saved: s.path,
           start,
           sources: sources.slice(start, start + s.count),
-          label: sections.length > 1 ? `${name} · ${k + 1}` : name,
         },
       ];
     });
   });
+}
+
+/**
+ * `placedSections`, keeping each section as it was while its light is
+ * unchanged, so its shape doesn't re-render when another light is edited.
+ */
+function usePlaced(devices: readonly AddedDevice[], aspect: number): Placed[] {
+  const prev = useRef<{ aspect: number; placed: Placed[] }>({ aspect, placed: [] });
+  return useMemo(() => {
+    const old =
+      prev.current.aspect === aspect ? new Map(prev.current.placed.map((p) => [p.key, p])) : null;
+    const placed = placedSections(devices, aspect).map((p) => {
+      const o = old?.get(p.key);
+      return o && o.device === p.device ? o : p;
+    });
+    prev.current = { aspect, placed };
+    return placed;
+  }, [devices, aspect]);
 }
 
 /** The element's size in pixels, kept up to date. */
@@ -97,91 +113,125 @@ const typing = (t: EventTarget | null) =>
   t instanceof HTMLElement &&
   (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName));
 
-/** The engine's small frame, scaled up with crisp pixels. */
+/** The engine's small frame (the screen or a scene), scaled up with crisp pixels. */
 function ScreenImage() {
   const image = useScreen((s) => s.image);
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const ctx = image && ref.current?.getContext("2d");
     if (!image || !ctx) return;
-    const rgba = new Uint8ClampedArray(image.width * image.height * 4);
-    for (let i = 0, j = 0; i < image.rgb.length; i += 3, j += 4) {
-      rgba[j] = image.rgb[i] as number;
-      rgba[j + 1] = image.rgb[i + 1] as number;
-      rgba[j + 2] = image.rgb[i + 2] as number;
-      rgba[j + 3] = 255;
-    }
-    ctx.putImageData(new ImageData(rgba, image.width, image.height), 0, 0);
+    ctx.putImageData(new ImageData(image.rgba, image.width, image.height), 0, 0);
   }, [image]);
-  if (!image) return <div className="canvas-waiting">Waiting for the screen…</div>;
+  if (!image) return <div className="canvas-waiting">Waiting for the canvas…</div>;
   return <canvas ref={ref} width={image.width} height={image.height} />;
 }
 
 const line = (pts: readonly Pt[]) => pts.map((p) => p.join(",")).join(" ");
 
+/**
+ * A section's segment colors over its band. Only a filled band shows them, so
+ * only it follows the live colors; the rest keep the last ones for fading out.
+ */
+function ShapeFill({
+  p,
+  regions,
+  live,
+}: {
+  p: Placed;
+  regions: ReturnType<typeof bandRegions>;
+  live: boolean;
+}) {
+  const colors = useSegmentCss(p.device.ip, p.start, p.sources, live);
+  return <BandFill regions={regions} colors={colors} className="shape-piece" />;
+}
+
 /** A section's band, in its segments' colors. */
-function Shape({
+const Shape = memo(function Shape({
   p,
   w,
   h,
   selected,
-  hover,
+  hovered,
+  visible,
+  filled,
 }: {
   p: Placed;
   w: number;
   h: number;
   selected: boolean;
-  hover: boolean;
+  hovered: boolean;
+  visible: boolean;
+  filled: boolean;
 }) {
-  const live = useLive((s) => s.paths[p.device.ip]);
-  const px = p.path.points.map(([x, y]) => [x * w, y * h] as Pt);
-  const loop = p.path.closed && px.length > 2 ? [...px, px[0] as Pt] : px;
-  const pieces = splitPath(px, p.path.closed, p.sources.length);
-  const band = Math.max(p.path.width * h, 2);
-  const color = (i: number): Rgb | undefined => {
-    const s = p.sources[i] as Source;
-    return s === "path" ? live?.[p.start + i] : hexRgb(s);
-  };
+  const count = p.sources.length;
+  const { px, band, regions, loop, pieces, direction } = useMemo(() => {
+    const px = p.path.points.map(([x, y]) => [x * w, y * h] as Pt);
+    const band = Math.max(p.path.width * h, 2);
+    return {
+      px,
+      band,
+      regions: bandRegions(px, p.path.closed, band, count),
+      loop: p.path.closed && px.length > 2 ? [...px, px[0] as Pt] : px,
+      pieces: splitPath(px, p.path.closed, count),
+      direction: directionMarks(px, p.path.closed),
+    };
+  }, [p.path, w, h, count]);
   return (
     <g
       className="shape"
       data-selected={selected || undefined}
-      data-hover={hover || undefined}
-      data-off={p.device.on ? undefined : ""}
+      data-hover={hovered || undefined}
+      data-visible={visible || undefined}
+      data-filled={filled || undefined}
+      aria-hidden={!visible}
     >
-      {px.length > 1 && (
-        // A light rim around the band, so it reads over any picture.
-        <polyline className="shape-rim" points={line(loop)} strokeWidth={band + 4} />
+      <ShapeFill p={p} regions={regions} live={filled} />
+      <ShapeOutline points={px} closed={p.path.closed} width={band} />
+      <g className="shape-details">
+        {px.length > 1 && <polyline className="shape-path" points={line(loop)} />}
+        {pieces.map((piece, i) => {
+          const at = splitPath(piece, false, 2)[1]?.[0] ?? piece[0];
+          return (
+            <circle
+              // biome-ignore lint/suspicious/noArrayIndexKey: segments are ordered positions
+              key={i}
+              className="shape-segment"
+              cx={at?.[0]}
+              cy={at?.[1]}
+              r={2.5}
+            />
+          );
+        })}
+      </g>
+      {direction.length > 0 && (
+        <g className="shape-direction">
+          {direction.map((mark, i) => (
+            <g
+              // biome-ignore lint/suspicious/noArrayIndexKey: markers follow the path order
+              key={i}
+            >
+              <line
+                className="shape-direction-tail-halo"
+                x1={mark.tail[0][0]}
+                y1={mark.tail[0][1]}
+                x2={mark.tail[1][0]}
+                y2={mark.tail[1][1]}
+              />
+              <line
+                className="shape-direction-tail"
+                x1={mark.tail[0][0]}
+                y1={mark.tail[0][1]}
+                x2={mark.tail[1][0]}
+                y2={mark.tail[1][1]}
+              />
+              <polygon points={line(mark.triangle)} />
+            </g>
+          ))}
+        </g>
       )}
-      {pieces.map((piece, i) => (
-        <polyline
-          // biome-ignore lint/suspicious/noArrayIndexKey: pieces are positions
-          key={i}
-          className="shape-piece"
-          points={line(piece)}
-          style={{ stroke: css(color(i)) }}
-          strokeWidth={band}
-        />
-      ))}
     </g>
   );
-}
-
-/** A section's name, in a small tag over the middle of its shape. */
-function Tag({ p, frame }: { p: Placed; frame: { x: number; y: number; w: number; h: number } }) {
-  const px = p.path.points.map(([x, y]) => [x * frame.w, y * frame.h] as Pt);
-  const at = labelPoint(px, p.path.closed);
-  if (!at) return null;
-  return (
-    <span
-      className="tag"
-      data-off={p.device.on ? undefined : ""}
-      style={{ left: frame.x + at[0], top: frame.y + at[1] }}
-    >
-      {p.label}
-    </span>
-  );
-}
+});
 
 const SHORTCUTS: [string, string][] = [
   ["Click a band", "Select a light"],
@@ -273,6 +323,8 @@ type Drag =
 export function Canvas() {
   const devices = useStore((s) => s.devices);
   const selection = useStore((s) => s.selection);
+  const hoveredLight = useStore((s) => s.hoveredLight);
+  const hoveredSection = useStore((s) => s.hoveredSection);
   const drawing = useStore((s) => s.drawing);
   const points = useStore((s) => s.points);
   const select = useStore((s) => s.select);
@@ -282,12 +334,14 @@ export function Canvas() {
   const breakUndo = useStore((s) => s.breakUndo);
   const undo = useStore((s) => s.undo);
   const redo = useStore((s) => s.redo);
-  const image = useScreen((s) => s.image) ?? FALLBACK;
-  const aspect = image.width / image.height;
+  // Only the shape: the picture itself changes up to 10 times a second.
+  const aspect = useScreenAspect();
   const vp = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const { w: vw, h: vh } = useSize(vp);
   const [view, setView] = useState<View>(FIT);
+  const fills = useStore((s) => s.fills);
+  const showFill = selection ? (fills[selection.id] ?? true) : false;
   // The artboard: the screen's place in the viewport. `w`x`h` is its size.
   const frame = frameOf(view, vw, vh, aspect);
   const { w, h } = frame;
@@ -300,21 +354,34 @@ export function Canvas() {
   /** A handle is being pressed, so its focus isn't from the keyboard. */
   const pressing = useRef(false);
 
-  const placed = placedSections(devices, aspect);
+  const placed = usePlaced(devices, aspect);
+  const isHovered = (p: Placed) =>
+    hoveredLight !== null
+      ? p.device.id === hoveredLight && (hoveredSection === null || p.section === hoveredSection)
+      : p.key === hover;
+  // SVG paints later siblings on top; retain keys so hover doesn't restart fades.
+  const ordered = [...placed].sort((a, b) => Number(isHovered(a)) - Number(isHovered(b)));
+  const visible = placed.filter(
+    (p) =>
+      p.device.id === selection?.id ||
+      (p.device.id === hoveredLight && (hoveredSection === null || p.section === hoveredSection)),
+  );
   const current = placed.find(
     (p) => p.device.id === selection?.id && p.section === selection.section,
   );
   // In drawing mode the selected section may still have no points.
   const editing: LightPath | undefined =
     current?.path ??
-    (drawing && selection ? { points: [], width: 0.12, closed: false } : undefined);
+    (drawing && selection?.section != null
+      ? { points: [], width: 0.12, closed: false }
+      : undefined);
   const picked = points.filter((i) => i < (editing?.points.length ?? 0));
   /**
    * Save an edit made on screen. It maps back into the saved path as it was
    * when the drag started, so a fitted path doesn't drift as it's dragged.
    */
   const update = (path: LightPath) => {
-    if (!selection) return;
+    if (!selection || selection.section === null) return;
     const base = drag?.kind === "points" || drag?.kind === "move" ? drag.saved : current?.saved;
     setSectionPath(
       selection.id,
@@ -333,7 +400,8 @@ export function Canvas() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (typing(e.target)) return;
+      // Calibration covers the canvas, and has its own keys.
+      if (typing(e.target) || useStore.getState().calibrating) return;
       const { editing, picked, drawing, update, w, h, zoom } = live.current;
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
@@ -378,7 +446,10 @@ export function Canvas() {
         undo();
         return;
       }
-      if (!editing) return;
+      if (!editing) {
+        if (e.key === "Escape") select(null);
+        return;
+      }
       if (ctrl && key === "a") {
         e.preventDefault();
         setPoints(editing.points.map((_, i) => i));
@@ -504,7 +575,7 @@ export function Canvas() {
   };
   const hitTest = (p: Pt) => {
     const hit = (x: Placed) => distanceTo(x.path, p, w, h) <= REACH;
-    return current && hit(current) ? current : [...placed].reverse().find(hit);
+    return current && hit(current) ? current : [...visible].reverse().find(hit);
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
@@ -660,9 +731,6 @@ export function Canvas() {
   };
 
   const px = (editing?.points ?? []).map(([x, y]) => [x * w, y * h] as Pt);
-  const loop = editing?.closed && px.length > 2 ? [...px, px[0] as Pt] : px;
-  const count = current?.sources.length ?? 1;
-  const pieces = splitPath(px, !!editing?.closed, count);
   const last = px[px.length - 1];
   const boxRect =
     drag?.kind === "box"
@@ -687,7 +755,7 @@ export function Canvas() {
               : undefined;
 
   return (
-    <section className="canvas" aria-label="Screen">
+    <section className="canvas" aria-label="Canvas">
       <Toolbar zoom={view.zoom} onZoom={(f) => zoom(f)} onFit={() => setView(FIT)} />
       <div ref={vp} className="viewport" data-pointer={pointer}>
         <div className="artboard" style={{ left: frame.x, top: frame.y, width: w, height: h }}>
@@ -731,14 +799,22 @@ export function Canvas() {
           }}
         >
           <g transform={`translate(${frame.x} ${frame.y})`}>
-            {placed.map((p) => (
+            {ordered.map((p) => (
               <Shape
                 key={p.key}
                 p={p}
                 w={w}
                 h={h}
-                selected={p === current}
-                hover={p.key === hover && p !== current}
+                selected={
+                  p.device.id === selection?.id && (selection.section === null || p === current)
+                }
+                hovered={isHovered(p)}
+                filled={
+                  p.device.id === selection?.id &&
+                  (selection.section === null || p === current) &&
+                  showFill
+                }
+                visible={visible.includes(p)}
               />
             ))}
             {guides.x !== undefined && (
@@ -761,7 +837,6 @@ export function Canvas() {
             )}
             {editing && (
               <g className="editor">
-                {px.length > 1 && <polyline className="editor-line" points={line(loop)} />}
                 {drawing && last && cursor && (
                   <line
                     className="editor-ghost"
@@ -771,28 +846,6 @@ export function Canvas() {
                     y2={cursor[1] * h}
                   />
                 )}
-                {pieces.slice(1).map((piece, i) => (
-                  <circle
-                    // biome-ignore lint/suspicious/noArrayIndexKey: pieces are positions
-                    key={i}
-                    className="editor-tick"
-                    cx={piece[0]?.[0]}
-                    cy={piece[0]?.[1]}
-                    r={2.5}
-                  />
-                ))}
-                {count > 1 &&
-                  count <= 60 &&
-                  pieces.map((piece, i) => {
-                    // Halfway along the piece.
-                    const [x, y] = splitPath(piece, false, 2)[1]?.[0] ?? (piece[0] as Pt);
-                    return (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: pieces are positions
-                      <text key={i} className="editor-label" x={x} y={y}>
-                        {(current?.start ?? 0) + i + 1}
-                      </text>
-                    );
-                  })}
                 {px.map(([x, y], i) => (
                   // biome-ignore lint/a11y/useSemanticElements: an SVG handle can't be a <button>
                   <circle
@@ -804,9 +857,10 @@ export function Canvas() {
                     aria-label={i === 0 ? "Point 1, start" : `Point ${i + 1}`}
                     aria-pressed={picked.includes(i)}
                     data-start={i === 0 || undefined}
+                    data-end={(!editing.closed && i > 0 && i === px.length - 1) || undefined}
                     cx={x}
                     cy={y}
-                    r={i === 0 ? HANDLE * 1.4 : HANDLE}
+                    r={HANDLE}
                     onPointerDown={(e) => onHandleDown(i, e)}
                     onFocus={() => {
                       // Tabbing to a point picks it.
@@ -824,23 +878,7 @@ export function Canvas() {
             {boxRect && <rect className="marquee" {...boxRect} />}
           </g>
         </svg>
-        <div className="tags" aria-hidden>
-          {placed.map((p) => (
-            <Tag key={p.key} p={p} frame={frame} />
-          ))}
-        </div>
       </div>
-      <p className="canvas-hint meta">
-        {drawing
-          ? "Click to add points from where the strip starts. Click the first point to close the loop. Double-click or Enter when done."
-          : editing
-            ? picked.length
-              ? `${picked.length} ${picked.length === 1 ? "point" : "points"} picked. Drag to move, arrows to nudge, Delete to remove.`
-              : "Drag the band to move it. Click points to pick them, Shift+click or drag a box to pick more."
-            : placed.length > 0
-              ? "Click a light to edit it."
-              : "Add a light to place it on the screen."}
-      </p>
     </section>
   );
 }

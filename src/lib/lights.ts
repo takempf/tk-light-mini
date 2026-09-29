@@ -1,3 +1,4 @@
+import { linePath } from "./path";
 import { type AddedDevice, defaultSegments, type Section, type Source } from "./types";
 
 /** Segments the light shows: its razer count, or one without razer mode. */
@@ -25,6 +26,10 @@ export function fitSections(sections: readonly Section[], total: number): Sectio
 
 /** The light's sections, fitted to its segments. */
 export const sectionsOf = (d: AddedDevice) => fitSections(d.sections, segmentCount(d));
+
+/** Display name for one section; the default follows its current position. */
+export const sectionName = (section: Section, index: number) =>
+  section.name?.trim() || `Section ${index + 1}`;
 
 /** Where each section starts, in segments. */
 export function sectionStarts(sections: readonly Section[]): number[] {
@@ -56,13 +61,14 @@ export function sectionAt(sections: readonly Section[], i: number): number {
 
 /**
  * Split section `k` after `at` of its segments (default: half). The new second
- * part keeps the color and is unplaced.
+ * part keeps the color and starts as a horizontal path across the middle.
  */
 export function splitSection(sections: readonly Section[], k: number, at?: number): Section[] {
   const s = sections[k];
   if (!s || s.count < 2) return [...sections];
   const first = Math.min(Math.max(1, at ?? Math.floor(s.count / 2)), s.count - 1);
-  const tail: Section = { count: s.count - first, color: s.color };
+  const tail: Section = { count: s.count - first, color: s.color, path: linePath(s.path?.width) };
+  if (s.on !== undefined) tail.on = s.on;
   return [...sections.slice(0, k), { ...s, count: first }, tail, ...sections.slice(k + 1)];
 }
 

@@ -63,11 +63,22 @@ describe("sections of a light", () => {
 describe("split and merge", () => {
   const path = { points: [[0, 0.5] as [number, number]], width: 0.1, closed: false };
 
-  it("splits in half by default, and the new part is unplaced", () => {
+  it("splits in half by default, with a new path across the middle", () => {
     const out = splitSection([{ count: 12, color: "#ff0000", path }], 0);
     expect(out).toEqual([
       { count: 6, color: "#ff0000", path },
-      { count: 6, color: "#ff0000" },
+      {
+        count: 6,
+        color: "#ff0000",
+        path: {
+          points: [
+            [0, 0.5],
+            [1, 0.5],
+          ],
+          width: 0.1,
+          closed: false,
+        },
+      },
     ]);
     expect(splitSection([sec(5)], 0, 4).map((s) => s.count)).toEqual([4, 1]);
     expect(splitSection([sec(5)], 0, 9).map((s) => s.count)).toEqual([4, 1]);

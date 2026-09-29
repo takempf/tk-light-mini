@@ -1,16 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import type {
-  EngineConfig,
-  EngineStatus,
-  GoveeDevice,
-  MonitorInfo,
-  Rgb,
-  ScreenImage,
-} from "./types";
-
-const decodeRgb = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
+import { decodePreview, type Preview } from "./preview";
+import type { EngineConfig, GoveeDevice, MonitorInfo } from "./types";
 
 /** Thin wrapper over Tauri IPC, so tests can mock one module. */
 export const api = {
@@ -21,17 +13,43 @@ export const api = {
   identifyDevice: (ip: string) => invoke<void>("identify_device", { ip }),
   setPower: (ip: string, on: boolean) => invoke<void>("set_power", { ip, on }),
   lightsOff: (ips: string[]) => invoke<void>("lights_off", { ips }),
-  onPaths: (cb: (p: { ip: string; colors: Rgb[] }[]) => void): Promise<UnlistenFn> =>
-    listen<{ ip: string; colors: Rgb[] }[]>("paths", (e) => cb(e.payload)),
-  onScreen: (cb: (s: ScreenImage) => void): Promise<UnlistenFn> =>
-    listen<{ width: number; height: number; rgb: string }>("screen", (e) =>
-      cb({ ...e.payload, rgb: decodeRgb(e.payload.rgb) }),
-    ),
-  onStatus: (cb: (s: EngineStatus) => void): Promise<UnlistenFn> =>
-    listen<EngineStatus>("engine-status", (e) => cb(e.payload)),
+  /** Ask where to save `text`, suggesting `name`, and save it. False if cancelled. */
+  exportSetup: (name: string, text: string) => invoke<boolean>("export_setup", { name, text }),
+  /** Ask for a setup file and read it. Null if cancelled. */
+  importSetup: () => invoke<string | null>("import_setup"),
+  /**
+   * What changed in the engine's status, live colors and screen image after
+   * `after`. Waits up to a second for something to. Raw bytes, not an event:
+   * Tauri delivers events by eval'ing script.
+   */
+  nextPreview: async (after: number): Promise<Preview> =>
+    decodePreview(await invoke<ArrayBuffer>("next_preview", { after })),
   minimize: async () => getCurrentWindow().minimize(),
   toggleMaximize: async () => getCurrentWindow().toggleMaximize(),
   close: async () => getCurrentWindow().close(),
   isMaximized: async () => getCurrentWindow().isMaximized(),
   onResized: async (cb: () => void): Promise<UnlistenFn> => getCurrentWindow().onResized(cb),
+  /**
+   * Fill the monitor `monitor` names (as `listMonitors` does), or the window's
+   * own. Resolves to a function that puts the window back.
+   */
+  fullscreen: async (monitor?: string): Promise<() => Promise<void>> => {
+    const w = getCurrentWindow();
+    const [position, maximized] = await Promise.all([w.outerPosition(), w.isMaximized()]);
+    // Windows names them `\.\DISPLAY1`; `listMonitors` drops the prefix.
+    const target = monitor
+      ? (await availableMonitors()).find((m) => m.name?.endsWith(`\${monitor}`))
+      : undefined;
+    if (target) {
+      if (maximized) await w.unmaximize();
+      await w.setPosition(target.position);
+    }
+    await w.setFullscreen(true);
+    return async () => {
+      await w.setFullscreen(false);
+      if (!target) return;
+      await w.setPosition(position);
+      if (maximized) await w.maximize();
+    };
+  },
 };

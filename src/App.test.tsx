@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api } from "./lib/api";
+import { resolveCalibration } from "./lib/calibration";
+import { flushSaves } from "./lib/storage";
 import type { AddedDevice, LightPath } from "./lib/types";
 import { PAD } from "./lib/view";
 import { DEFAULT_SETTINGS, useScreen, useStore } from "./store";
@@ -18,7 +20,12 @@ beforeEach(() => {
     scanning: false,
     scanError: null,
     selection: null,
+    hoveredLight: null,
+    hoveredSection: null,
+    fills: {},
     drawing: false,
+    points: [],
+    calibrating: null,
   });
   vi.mocked(api.discoverDevices).mockResolvedValue([]);
 });
@@ -38,7 +45,186 @@ const light = (over: Partial<AddedDevice>): AddedDevice => ({
 const lastDevice = () => vi.mocked(api.setConfig).mock.lastCall?.[0].devices[0];
 
 describe("App", () => {
-  it("scans on start, adds a light around the screen and colors it", async () => {
+  it("resizes the panels by dragging or keyboard and remembers the split", () => {
+    const first = render(<App />);
+    const divider = screen.getByRole("separator", { name: "Resize Lights and Details" });
+    const sidebar = screen.getByRole("complementary", { name: "Lights, details, and canvas" });
+    vi.spyOn(sidebar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 320, 507));
+    vi.spyOn(divider, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 200, 320, 7));
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 200 });
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 300 });
+    fireEvent.pointerUp(divider, { pointerId: 1 });
+    expect(divider).toHaveAttribute("aria-valuenow", "60");
+    expect(sidebar.style.getPropertyValue("--layers-size")).toBe("60fr");
+    fireEvent.keyDown(divider, { key: "ArrowUp" });
+    expect(divider).toHaveAttribute("aria-valuenow", "58");
+    first.unmount();
+    render(<App />);
+    const restored = screen.getByRole("separator", { name: "Resize Lights and Details" });
+    expect(restored).toHaveAttribute("aria-valuenow", "58");
+    fireEvent.keyDown(restored, { key: "End" });
+    fireEvent.keyDown(restored, { key: "ArrowDown" });
+    expect(restored).toHaveAttribute("aria-valuenow", "80");
+    fireEvent.keyDown(restored, { key: "Home" });
+    fireEvent.keyDown(restored, { key: "ArrowUp" });
+    expect(restored).toHaveAttribute("aria-valuenow", "20");
+    fireEvent.doubleClick(restored);
+    expect(restored).toHaveAttribute("aria-valuenow", "40");
+  });
+
+  it("collapses sidebar panels from their headings", async () => {
+    useStore.setState({ devices: [light({})] });
+    const user = userEvent.setup();
+    render(<App />);
+    const sidebar = screen.getByRole("complementary", { name: "Lights, details, and canvas" });
+    const lights = screen.getByRole("button", { name: "Lights" });
+    const details = screen.getByRole("button", { name: "Details" });
+    const screenOptions = screen.getByRole("button", { name: "Canvas" });
+    expect(lights).toHaveAttribute("aria-expanded", "true");
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(screenOptions).toHaveAttribute("aria-expanded", "false");
+    await user.click(lights);
+    expect(lights).toHaveAttribute("aria-expanded", "false");
+    expect(sidebar.style.getPropertyValue("--divider-size")).toBe("0px");
+    expect(screen.queryByRole("separator", { name: "Resize Lights and Details" })).toBeNull();
+    expect(document.getElementById(lights.getAttribute("aria-controls") ?? "")).toHaveAttribute(
+      "inert",
+    );
+    expect(screen.queryByRole("button", { name: "Edit Lamp" })).toBeNull();
+    await user.click(lights);
+    expect(screen.getByRole("button", { name: "Edit Lamp" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("separator", { name: "Resize Lights and Details" }),
+    ).toBeInTheDocument();
+    await user.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("No light selected.")?.closest(".panel-body")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    await user.click(screenOptions);
+    expect(screenOptions).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("slider", { name: "Saturation" })).toBeInTheDocument();
+    await user.click(screenOptions);
+    expect(screen.queryByRole("slider", { name: "Saturation" })).toBeNull();
+  });
+
+  it("keeps grouped paths visible while editing in the separate details pane", async () => {
+    const path: LightPath = {
+      points: [
+        [0.2, 0.2],
+        [0.8, 0.2],
+      ],
+      width: 0.1,
+      closed: false,
+    };
+    useStore.setState({
+      devices: [
+        light({
+          razer: true,
+          segments: 4,
+          sections: [
+            { count: 2, color: "path", path },
+            {
+              count: 2,
+              color: "#ff0000",
+              path: {
+                ...path,
+                points: [
+                  [0.2, 0.8],
+                  [0.8, 0.8],
+                ],
+              },
+            },
+          ],
+        }),
+        light({ id: "B", name: "Desk", ip: "10.0.0.3" }),
+      ],
+    });
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    const layers = screen.getByRole("region", { name: "Lights" });
+    const details = screen.getByRole("region", { name: "Details" });
+    const second = within(layers).getByRole("button", { name: "Section 2 (3–4)" });
+    const pathPower = within(layers).getByRole("switch", { name: "Power for Lamp Section 2" });
+    await user.click(pathPower);
+    expect(pathPower).toHaveAttribute("aria-checked", "false");
+    expect(useStore.getState().selection).toBeNull();
+    expect(lastDevice()?.segments).toEqual(["path", "path", "#000000", "#000000"]);
+    await user.click(pathPower);
+    expect(lastDevice()?.segments).toEqual(["path", "path", "#ff0000", "#ff0000"]);
+    fireEvent.pointerEnter(second);
+    expect(useStore.getState().hoveredSection).toBe(1);
+    expect(container.querySelectorAll(".shape[data-hover]")).toHaveLength(1);
+    expect(container.querySelectorAll(".shape[data-visible]")).toHaveLength(1);
+    expect(within(layers).getAllByRole("button", { name: /Edit / })).toHaveLength(2);
+    await user.click(second);
+    expect(second).toHaveAttribute("aria-pressed", "true");
+    expect(within(layers).queryByText(/sections|segments|100%/i)).toBeNull();
+    expect(
+      within(details).getByRole("textbox", { name: "Name for section 2 of Lamp" }),
+    ).toHaveValue("Section 2");
+    expect(within(details).getByText("Segments")).toBeInTheDocument();
+    expect(within(details).getByText("2 (3–4)")).toBeInTheDocument();
+    expect(within(details).queryByRole("textbox", { name: "Name for A" })).toBeNull();
+    expect(within(details).queryByRole("heading", { level: 3 })).toBeNull();
+    const parent = within(layers).getByRole("button", { name: "Edit Lamp" });
+    expect(parent).toHaveAttribute("aria-pressed", "false");
+    expect(container.querySelectorAll(".shape[data-selected]")).toHaveLength(1);
+    expect(container.querySelectorAll(".shape[data-visible]")).toHaveLength(2);
+    expect(container.querySelectorAll(".shape[data-filled]")).toHaveLength(1);
+    expect(
+      container.querySelector(".shape[data-visible]:not([data-selected]) .shape-outline"),
+    ).not.toBeNull();
+    expect(within(details).getByRole("switch", { name: "Show fill" })).toBeInTheDocument();
+    await user.click(within(layers).getByRole("button", { name: "Collapse Lamp" }));
+    expect(within(layers).queryByRole("group", { name: "Sections for Lamp" })).toBeNull();
+    expect(useStore.getState().selection).toEqual({ id: "A", section: 1 });
+    await user.click(within(layers).getByRole("button", { name: "Expand Lamp" }));
+    expect(within(layers).getByRole("button", { name: "Section 2 (3–4)" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(parent);
+    expect(parent).toHaveAttribute("aria-pressed", "true");
+    expect(within(details).getByText("2 sections · 4 segments")).toBeInTheDocument();
+    expect(useStore.getState().selection).toEqual({ id: "A", section: null });
+    expect(within(layers).getByRole("button", { name: "Section 2 (3–4)" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(container.querySelectorAll(".shape[data-selected]")).toHaveLength(2);
+    expect(container.querySelectorAll(".editor-handle")).toHaveLength(0);
+    expect(within(details).getByRole("textbox", { name: "Name for A" })).toBeInTheDocument();
+    expect(within(details).queryByRole("button", { name: "Redraw" })).toBeNull();
+    await user.click(within(layers).getByRole("button", { name: "Edit Desk" }));
+    expect(within(details).getByRole("textbox", { name: "Name for B" })).toBeInTheDocument();
+    expect(within(layers).getByRole("button", { name: "Edit Lamp" })).toBeInTheDocument();
+  });
+
+  it("edits a section name in Details and restores its default when cleared", async () => {
+    useStore.setState({ devices: [light({})] });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Section 1 (1)" }));
+    const name = screen.getByRole("textbox", { name: "Name for section 1 of Lamp" });
+    expect(name).toHaveValue("Section 1");
+    await user.clear(name);
+    await user.type(name, "Desk edge");
+    expect(screen.getByRole("button", { name: "Desk edge (1)" })).toHaveTextContent("Desk edge");
+    expect(screen.getByRole("switch", { name: "Power for Lamp Desk edge" })).toBeInTheDocument();
+    flushSaves();
+    const saved = JSON.parse(localStorage.getItem("tk-light-mini") ?? "{}");
+    expect(saved.state?.devices[0]?.sections[0]?.name).toBe("Desk edge");
+    await user.clear(name);
+    await user.tab();
+    expect(name).toHaveValue("Section 1");
+    expect(screen.getByRole("button", { name: "Section 1 (1)" })).toBeInTheDocument();
+  });
+
+  it("scans on start, adds a light across the middle and colors it", async () => {
     vi.mocked(api.discoverDevices).mockResolvedValue([
       { id: "AA:BB", ip: "10.0.0.2", sku: "H6199" },
     ]);
@@ -46,28 +232,46 @@ describe("App", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Add H6199" }));
-    // Adding opens it, placed around the edge and following the screen.
+    // Adding opens it, placed across the middle and following the screen.
     expect(screen.getByRole("textbox", { name: /name for/i })).toHaveValue("H6199");
     expect(lastDevice()).toMatchObject({ segments: ["path"], sections: [{ count: 1 }] });
-    expect(lastDevice()?.sections[0]?.path?.closed).toBe(true);
+    expect(lastDevice()?.sections[0]?.path?.points).toEqual([
+      [0, 0.5],
+      [1, 0.5],
+    ]);
+    await user.click(screen.getByRole("button", { name: "Section 1 (1)" }));
+    expect(screen.queryByRole("group", { name: /color for h6199/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Color for H6199" }));
     const picker = screen.getByRole("group", { name: /color for h6199/i });
-    expect(within(picker).getByRole("button", { name: "Screen" })).toHaveAttribute(
+    expect(within(picker).getByRole("button", { name: "Canvas" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     // No segments without razer mode.
     expect(screen.queryByRole("group", { name: /segments of/i })).toBeNull();
 
-    await user.click(within(picker).getByRole("button", { name: "Red" }));
-    // A fixed color doesn't need the screen.
+    const red = within(picker).getByRole("button", { name: "Red" });
+    expect(red).not.toHaveAttribute("title");
+    await user.hover(red);
+    expect(await screen.findByText("Red", { selector: ".tk-tooltip" })).toBeInTheDocument();
+    await user.click(red);
+    expect(screen.getByRole("button", { name: "Color for H6199" })).toHaveTextContent("Red");
+    // A fixed color doesn't need the canvas.
     expect(lastDevice()).toMatchObject({ segments: ["#ff0000"], sections: [{ path: null }] });
+    fireEvent.change(within(picker).getByLabelText("Custom color"), {
+      target: { value: "#123456" },
+    });
+    expect(lastDevice()?.segments).toEqual(["#123456"]);
+    await user.click(within(picker).getByRole("button", { name: "Canvas" }));
+    expect(lastDevice()?.segments).toEqual(["path"]);
+    await user.click(screen.getByRole("button", { name: "Edit H6199" }));
     fireEvent.change(screen.getByRole("slider", { name: "Brightness" }), {
       target: { value: "0.5" },
     });
     expect(lastDevice()?.brightness).toBe(0.5);
 
-    await user.click(screen.getByRole("button", { name: "Back to lights" }));
-    expect(screen.getByText("Red · 50%")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("Red · 50%")).toBeNull();
   });
 
   it("splits a razer light into sections and colors single segments", async () => {
@@ -79,11 +283,15 @@ describe("App", () => {
     await user.click(screen.getByRole("switch", { name: /razer/i }));
     expect(screen.getByRole("slider", { name: "Segments" })).toBeInTheDocument();
     expect(lastDevice()).toMatchObject({ razer: true, segments: Array(12).fill("path") });
+    await user.click(screen.getByRole("button", { name: "Section 1 (1–12)" }));
 
     await user.click(screen.getByRole("button", { name: "Split in half" }));
-    const second = screen.getByRole("button", { name: "Section 2, segments 7–12" });
+    const second = screen.getByRole("button", { name: "Section 2 (7–12)" });
     expect(second).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Placement · not placed")).toBeInTheDocument();
+    expect(lastDevice()?.sections[1]?.path?.points).toEqual([
+      [0, 0.5],
+      [1, 0.5],
+    ]);
     await user.click(screen.getByRole("button", { name: "Line" }));
     expect(lastDevice()?.sections.map((s) => s.count)).toEqual([6, 6]);
     expect(lastDevice()?.sections[1]?.path?.closed).toBe(false);
@@ -94,7 +302,9 @@ describe("App", () => {
     await user.keyboard("{Shift>}");
     await user.click(within(bar).getByRole("button", { name: "Segment 9" }));
     await user.keyboard("{/Shift}");
-    expect(screen.getByText("Color · 2 segments")).toBeInTheDocument();
+    expect(screen.getByText("Color", { selector: ".tk-range-label" })).toBeInTheDocument();
+    expect(screen.getByText("2 segments")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Color for Bars" }));
     const picker = screen.getByRole("group", { name: /color for bars/i });
     await user.click(within(picker).getByRole("button", { name: "Red" }));
     expect(lastDevice()?.segments.slice(6, 10)).toEqual(["path", "#ff0000", "#ff0000", "path"]);
@@ -102,7 +312,7 @@ describe("App", () => {
     expect(lastDevice()?.segments).toEqual(Array(12).fill("path"));
 
     // A picked segment moves the split.
-    await user.click(screen.getByRole("button", { name: "Section 1, segments 1–6" }));
+    await user.click(screen.getByRole("button", { name: "Section 1 (1–6)" }));
     await user.click(screen.getByRole("button", { name: "Segment 3" }));
     await user.click(screen.getByRole("button", { name: "Split before 3" }));
     expect(lastDevice()?.sections.map((s) => s.count)).toEqual([2, 4, 6]);
@@ -120,28 +330,71 @@ describe("App", () => {
     expect(api.setPower).toHaveBeenCalledWith("10.0.0.2", false);
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].devices).toEqual([]);
     const row = power.closest(".light") as HTMLElement;
-    expect(within(row).getByText("Off")).toBeInTheDocument();
+    expect(row).toHaveAttribute("data-off");
   });
 
   it("toggles sync", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const power = screen.getByRole("switch", { name: /off|syncing/i });
+    const power = screen.getByRole("switch", { name: "Syncing Off" });
     expect(power).toHaveAttribute("aria-checked", "false");
+    expect(power.closest(".titlebar-toggle")).toHaveTextContent("SyncingOff");
     await user.click(power);
     expect(power).toHaveAttribute("aria-checked", "true");
+    expect(power.closest(".titlebar-toggle")).toHaveTextContent("SyncingOn");
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].enabled).toBe(true);
   });
 
-  it("tunes the screen from the settings popover", async () => {
+  it("turns every light off and back on from the titlebar", async () => {
+    useStore.setState({
+      devices: [light({}), light({ id: "B", ip: "10.0.0.3", name: "Desk" })],
+      enabled: true,
+    });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const power = screen.getByRole("switch", { name: "Lights On" });
+    const syncing = screen.getByRole("switch", { name: "Syncing On" });
+    expect(power.closest(".titlebar-toggle")).toHaveTextContent("LightsOn");
+    await user.click(power);
+    expect(power).toHaveAttribute("aria-checked", "false");
+    expect(power.closest(".titlebar-toggle")).toHaveTextContent("LightsOff");
+    expect(syncing).toHaveAttribute("aria-checked", "false");
+    expect(useStore.getState().devices.every((d) => !d.on)).toBe(true);
+    expect(api.lightsOff).toHaveBeenCalledWith(["10.0.0.2", "10.0.0.3"]);
+    await user.click(power);
+    expect(power).toHaveAttribute("aria-checked", "true");
+    expect(useStore.getState().devices.every((d) => d.on)).toBe(true);
+    expect(api.setPower).toHaveBeenCalledWith("10.0.0.2", true);
+    expect(api.setPower).toHaveBeenCalledWith("10.0.0.3", true);
+  });
+
+  it("tunes the canvas from the sidebar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Canvas" }));
     fireEvent.change(await screen.findByRole("slider", { name: "Saturation" }), {
       target: { value: "2" },
     });
     expect(vi.mocked(api.setConfig).mock.lastCall?.[0].tuning.saturation).toBe(2);
     expect(screen.queryByRole("slider", { name: /edge depth/i })).toBeNull();
+  });
+
+  it("follows a scene instead of the screen", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    const sources = screen.getByRole("group", { name: "Canvas source" });
+    expect(within(sources).getByRole("button", { name: "Screen" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(within(sources).getByRole("button", { name: "Night forest" }));
+    expect(vi.mocked(api.setConfig).mock.lastCall?.[0].canvas).toBe("forest");
+    expect(within(sources).getByRole("button", { name: "Night forest" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("drives the window from the title bar", async () => {
@@ -172,7 +425,7 @@ describe("Canvas", () => {
   beforeEach(() => {
     size(200 + 2 * PAD, 100 + 2 * PAD);
     HTMLCanvasElement.prototype.getContext = () => null; // not in jsdom
-    useScreen.setState({ image: { width: 2, height: 1, rgb: new Uint8Array(6) } });
+    useScreen.setState({ image: { width: 2, height: 1, rgba: new Uint8ClampedArray(8) } });
   });
   afterEach(() => {
     size(0, 0);
@@ -195,7 +448,7 @@ describe("Canvas", () => {
     useStore.setState({ devices: [light({ name: "Strip" })] });
     const user = userEvent.setup();
     const { container } = render(<App />);
-    await user.click(screen.getByRole("button", { name: "Edit Strip" }));
+    await user.click(screen.getByRole("button", { name: "Section 1 (1)" }));
     await user.click(screen.getByRole("button", { name: "Draw" }));
     const svg = layout();
 
@@ -230,7 +483,7 @@ describe("Canvas", () => {
     expect(points()).toHaveLength(2);
   });
 
-  it("selects by clicking a band, moves it, and deselects on empty space", async () => {
+  it("selects from the list, moves the band, and deselects on empty space", async () => {
     const path = {
       points: [
         [0.1, 0.5],
@@ -243,6 +496,7 @@ describe("Canvas", () => {
     render(<App />);
     const svg = layout();
     expect(screen.getByRole("button", { name: "Edit Lamp" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Lamp" }));
 
     fireEvent.pointerDown(svg, { button: 0, clientX: 40, clientY: 52 });
     expect(useStore.getState().selection).toEqual({ id: "A", section: 0 });
@@ -338,7 +592,7 @@ describe("Canvas", () => {
     expect(points()?.[0]?.[0]).toBeCloseTo(0.205);
     expect(points()?.[0]?.[1]).toBeCloseTo(0.3);
     // Keys typed in a field stay there.
-    fireEvent.keyDown(screen.getByRole("textbox", { name: /name for/i }), { key: "Delete" });
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Thickness" }), { key: "Delete" });
     expect(points()).toHaveLength(4);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(picked()).toEqual([]);
@@ -391,7 +645,7 @@ describe("Canvas", () => {
     useStore.setState({ devices: [light({ name: "Strip" })] });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: "Edit Strip" }));
+    await user.click(screen.getByRole("button", { name: "Section 1 (1)" }));
     await user.click(screen.getByRole("button", { name: "Draw" }));
     const svg = layout();
     for (const [x, y] of [
@@ -472,15 +726,44 @@ describe("Canvas", () => {
     expect(zoom()).toHaveTextContent("100%");
   });
 
-  it("names each light in a tag over its middle", () => {
+  it("shows shapes only for selected lights or list hover, without canvas labels", () => {
     selected(square);
     const { container } = render(<App />);
-    layout();
-    const tag = container.querySelector(".tag") as HTMLElement;
-    expect(tag).toHaveTextContent("Lamp");
-    // The middle of the square, in the viewport.
-    expect(tag.style.left).toBe(`${PAD + 100}px`);
-    expect(tag.style.top).toBe(`${PAD + 50}px`);
+    const svg = layout();
+    expect(container.querySelector(".shape[data-visible]")).not.toBeNull();
+    expect(container.querySelector(".shape[data-filled]")).not.toBeNull();
+    expect(container.querySelectorAll(".shape[data-visible] .shape-piece")).toHaveLength(1);
+    const fill = screen.getByRole("switch", { name: "Show fill" });
+    expect(fill).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(fill);
+    expect(fill).toHaveAttribute("aria-checked", "false");
+    expect(container.querySelector(".shape[data-filled]")).toBeNull();
+    expect(container.querySelector(".shape[data-visible] .shape-outline")).not.toBeNull();
+    expect(container.querySelector(".tag, .editor-label")).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector(".shape[data-visible]")).toBeNull();
+    fireEvent.pointerMove(svg, { clientX: 40, clientY: 20 });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 40, clientY: 20 });
+    fireEvent.pointerUp(svg);
+    expect(useStore.getState().selection).toBeNull();
+    expect(container.querySelector(".shape[data-visible]")).toBeNull();
+    const row = screen.getByRole("button", { name: "Edit Lamp" }).closest(".light");
+    if (!row) throw new Error("Missing light row");
+    fireEvent.pointerEnter(row);
+    expect(container.querySelector(".shape[data-visible]")).not.toBeNull();
+    expect(container.querySelector(".shape[data-filled]")).toBeNull();
+    expect(container.querySelector(".tag, .editor-label")).toBeNull();
+    fireEvent.pointerLeave(row);
+    expect(container.querySelector(".shape[data-visible]")).toBeNull();
+    fireEvent.pointerEnter(row);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Lamp" }));
+    expect(container.querySelector(".shape[data-visible]")).not.toBeNull();
+    expect(screen.getByRole("switch", { name: "Show fill" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector(".shape[data-visible]")).toBeNull();
   });
 
   it("fits a path to the screen on each axis", () => {
@@ -540,5 +823,54 @@ describe("Canvas", () => {
     const shown = lastDevice()?.sections[0]?.path?.points;
     expect(shown?.map(([x]) => x)).toEqual([0, 1]);
     expect(shown?.map(([, y]) => Math.round(y * 1000) / 1000)).toEqual([0.7, 0.7]);
+  });
+
+  it("calibrates a light step by step on a full screen test color", async () => {
+    useStore.setState({ devices: [light({})] });
+    vi.mocked(api.listMonitors).mockResolvedValue([
+      { index: 0, name: "DISPLAY2", width: 1920, height: 1080 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Edit Lamp" }));
+    expect(screen.getByText("Not calibrated")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Calibrate" }));
+    const dialog = screen.getByRole("dialog", { name: "Calibrate Lamp" });
+    expect(api.fullscreen).toHaveBeenCalledWith("DISPLAY2");
+    expect(dialog).toHaveStyle({ background: "rgb(255 255 255)" });
+    expect(lastDevice()).toMatchObject({ segments: ["#ffffff"], sections: [{ path: null }] });
+
+    // White: lower blue for a wall that looks too cool.
+    const inDialog = within(dialog);
+    fireEvent.change(inDialog.getByRole("slider", { name: "Blue" }), { target: { value: "200" } });
+    expect(lastDevice()?.calibration.white).toEqual([255, 255, 200]);
+    expect(lastDevice()?.calibration.blue).toEqual([0, 0, 200]);
+    // Compare with the uncalibrated color.
+    await user.click(inDialog.getByRole("switch", { name: "Calibrated" }));
+    expect(lastDevice()?.calibration.white).toEqual([255, 255, 255]);
+    await user.click(inDialog.getByRole("switch", { name: "Calibrated" }));
+
+    await user.click(inDialog.getByRole("button", { name: "Next" }));
+    expect(lastDevice()?.segments).toEqual(["#404040"]);
+    fireEvent.change(inDialog.getByRole("slider", { name: "Gamma" }), { target: { value: "2" } });
+    expect(lastDevice()?.calibration.gamma).toBe(2);
+    await user.click(inDialog.getByRole("button", { name: "Reset" }));
+    expect(lastDevice()?.calibration.gamma).toBe(1);
+    expect(inDialog.getByRole("button", { name: "Reset" })).toBeDisabled();
+
+    await user.click(inDialog.getByRole("button", { name: /Magenta/ }));
+    expect(lastDevice()?.segments).toEqual(["#ff00ff"]);
+    await user.click(inDialog.getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(lastDevice()?.segments).toEqual(["path"]);
+    expect(lastDevice()?.calibration.white).toEqual([255, 255, 200]);
+    expect(screen.getByText("Calibrated")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Calibrate" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.getByText("Not calibrated")).toBeInTheDocument();
+    expect(lastDevice()?.calibration).toEqual(resolveCalibration());
   });
 });

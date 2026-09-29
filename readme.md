@@ -15,11 +15,11 @@ Turning sync off leaves the lights on their last color. **Lights off**, next to 
 
 Each light has its own on/off switch. An off light is switched off and left out of syncing until you turn it back on. While syncing, the app keeps its other lights on: one switched off in the Govee app or with its own button comes back on within 10 seconds, so use the switch here instead.
 
-Click a light, in the list or on the screen, to open it. Inside you can rename it, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). **Screen** makes it follow the picture. The other colors stay fixed.
+Click a light, in the list or on the screen, to open it. Inside you can rename it, set its own brightness, and **Identify** it (it pulses hot pink at full brightness so you can tell which one it is). **Canvas** makes it follow the canvas: your screen, unless you pick a scene. The other colors stay fixed.
 
 ### Placing lights
 
-The big screen shows every light as a band over a live copy of your screen, with its name in a tag.
+The big canvas shows every light as a band over a live copy of your screen (or the scene you picked), with its name in a tag.
 
 - **Zoom and pan:** the wheel zooms in and out where the pointer is. Hold **Space** and drag, or drag with the middle button, to pan. The zoom buttons above the screen (or **Ctrl+=**, **Ctrl+−** and **Ctrl+0**) zoom in, out and back to fit.
 
@@ -42,9 +42,42 @@ With **Razer streaming** on, a light colors each of its segments on its own. The
 - Each section can follow the screen or have its own fixed color.
 - Pick segments in the bar to give just those a fixed color. **Follow section** undoes it.
 
-The sliders button in the title bar has the monitor, brightness, saturation, smoothing (how slowly colors fade) and sample rate.
+### Canvas
 
-Your lights and settings are saved between launches.
+The **Canvas** pane at the bottom of the sidebar picks what the lights follow. It's your **Screen** by default. The others:
+
+- **Phthalo:** the screen in four dithered shades of phthalo green.
+- Scenes the app paints itself, with no screen capture at all: **Night forest** (clouds drifting over dark pines), **Sunset**, **Aurora**, **Deep sea**, **Lava lamp** and **Fireplace**.
+
+Scenes are drawn at about 128 pixels wide, in your monitor's shape, from a small palette with ordered dithering. They cost well under a millisecond a frame, and keep going with the window minimized. Lights sit on a scene the same way they sit on the screen.
+
+The pane also has the monitor, brightness, saturation, smoothing (how slowly colors fade) and sample rate.
+
+Your lights and settings are saved between launches. To back them up or move them to another PC, use the menu next to **Scan**: **Export setup…** saves your lights (placement, sections, colors and calibration) and canvas settings to a file, and **Import setup…** loads one in place of what you have. Files from older versions of the app still import.
+
+### Matching the wall to the screen
+
+The screen, the light's LEDs and the wall each change colors their own way. A light blue wall makes white look cool. Govee green often leans blue next to a screen's green. The app can't measure any of this, so you match them by eye.
+
+Open a light and click **Calibrate**. The screen fills with a test color, and the light shows the same color. Change the light until the wall looks like the screen:
+
+1. **White:** lower the color the wall has too much of. Then set **Brightness** so the wall is about as bright as the screen. Over 100% only lifts dim colors: bright ones are already at full, and they keep their balance instead of clipping to white. Do this first. Colors you don't match later keep white's balance.
+2. **Dark grey:** set **Gamma** so the wall is as dim as the screen. Higher is darker.
+3. **Red, green, blue, yellow, cyan, magenta:** add a little of another color to shift the hue, or lower it if it's too strong. Skip any that already match.
+
+Click a step to jump to it. **Calibrated** switches the light between the calibrated and the plain color, to compare. **Reset** undoes one step. **Esc** or **Done** closes.
+
+Tips:
+
+- Do it in the light you watch in, with the lights where they'll stay.
+- Calibrate in the mode you use. Razer streaming can show colors differently.
+- Lights without razer streaming may fade for a few seconds after each change. Wait before judging.
+- While syncing, the other lights go dark, so only this light's glow is on the wall.
+- The test color fills the monitor picked in **Canvas**.
+
+The calibration applies to everything the light shows, fixed colors too. In the light's panel, **Reset** clears it, and **Copy to other** gives it to your other lights of the same model.
+
+How it works: each test color is a corner of the RGB color cube. The app sends the light your matched color for each corner, and blends between the nearest corners for everything else (like a 3D LUT). Greys use only white, so each match holds exactly and none of them moves another. Gamma is applied first, so it doesn't move the corners either.
 
 ### Light not showing up?
 
@@ -56,7 +89,7 @@ Your lights and settings are saved between launches.
 
 About 30 times a second:
 
-1. **Capture.** Windows' desktop duplication API grabs the screen. The frame stays on the GPU, which shrinks it to about 120px wide. Only that tiny image is copied back to the CPU, one frame later, so the CPU never waits on the GPU.
+1. **Capture.** Windows' desktop duplication API grabs the screen. The frame stays on the GPU, which shrinks it to about 120px wide. Only that tiny image is copied back to the CPU, one frame later, so the CPU never waits on the GPU. A painted scene skips this and draws its own small frame instead.
 2. **Pick colors.** For each segment of each light's path, it:
    - ignores black letterbox bars (a path along the screen edge follows the picture's edge)
    - averages in linear light
@@ -81,7 +114,9 @@ src/                 React UI, store, IPC wrapper
 src-tauri/src/
   capture.rs         DXGI capture + GPU downscale
   color.rs           color averaging, letterbox bars, smoothing
+  calibration.rs     per-light color matching
   paths.rs           per-segment sampling along drawn paths
+  visuals.rs         painted scenes and the phthalo filter
   govee.rs           LAN discovery and control
   engine.rs          the capture -> color -> send loop
   lib.rs             Tauri commands
@@ -104,6 +139,7 @@ Tests that need real hardware are skipped by default:
 cd src-tauri
 cargo test -- --ignored live_capture --nocapture    # grab a real frame
 cargo test -- --ignored live_scan_raw --nocapture   # print every Govee scan reply
+cargo test -- --ignored render_canvases --nocapture # save each scene as an image
 ```
 
 ## Experimental: razer streaming
@@ -124,7 +160,7 @@ Open a light and click **Draw path**. You get the screen as the app sees it (abo
 - **Thickness** sets how wide a band along the line is sampled.
 - **Edge loop** draws a loop around the screen edge, starting at the bottom right and going up. **Reverse** flips the direction, and **Closed loop** joins the end back to the start.
 
-The band is split along its length into one piece per segment, numbered from the start, each shown in its live color. A new path switches the light to the **Path** color (in the Screen palette), so segment 1 shows piece 1, and so on. You can still set single segments to other colors. Without razer streaming, the whole path is one color for the whole light.
+The band is split along its length into one piece per segment, numbered from the start, each shown in its live color. A new path switches the light to the **Canvas** color, so segment 1 shows piece 1, and so on. You can still set single segments to other colors. Without razer streaming, the whole path is one color for the whole light.
 
 Each pixel near the path goes to the nearest point on it, so at a corner a pixel counts once, for the nearer side. While the window is visible, the app keeps capturing even with sync off, so the editor always has the screen. It only sends to lights while syncing, and stops capturing when minimized.
 

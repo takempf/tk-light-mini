@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Calibrator } from "./components/Calibrator";
 import { Canvas } from "./components/Canvas";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
@@ -9,7 +10,6 @@ import "./App.css";
 export default function App() {
   const enabled = useStore((s) => s.enabled);
   const error = useStore((s) => s.status.error);
-  const lightCount = useStore((s) => s.devices.length);
 
   useEffect(() => {
     const stop = startSync();
@@ -24,14 +24,12 @@ export default function App() {
       <TitleBar />
       <div className="content">
         {error && enabled && <p className="banner error">Capture: {error}</p>}
-        {enabled && lightCount === 0 && (
-          <p className="banner hint">Add a light to start painting your wall.</p>
-        )}
         <main className="layout">
           <Canvas />
           <Sidebar />
         </main>
       </div>
+      <Calibrator />
     </div>
   );
 }

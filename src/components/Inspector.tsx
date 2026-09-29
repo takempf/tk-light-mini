@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { api } from "../lib/api";
-import { sectionStarts, sectionsOf, segmentCount, segmentSources } from "../lib/lights";
+import { isCalibrated } from "../lib/calibration";
+import {
+  sectionName,
+  sectionStarts,
+  sectionsOf,
+  segmentCount,
+  segmentSources,
+} from "../lib/lights";
 import {
   edgeLoop,
   flipPath,
@@ -11,9 +18,9 @@ import {
   startAt,
   unresolvePath,
 } from "../lib/path";
-import type { AddedDevice, Fit, LightPath, Source } from "../lib/types";
+import type { AddedDevice, Fit, LightPath, Section, Source } from "../lib/types";
 import { useScreenAspect, useStore } from "../store";
-import { Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
+import { Badge, Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
 import { ColorPicker } from "./ColorPicker";
 import { SegmentBar } from "./SegmentBar";
 import { pct, Slider } from "./Slider";
@@ -30,6 +37,16 @@ const FITS: { value: Fit; label: string }[] = [
   { value: "auto", label: "Auto" },
 ];
 
+function DetailLabel({ label, value, tag }: { label: string; value?: string; tag?: string }) {
+  return (
+    <div className="tk-range-header">
+      <span className="tk-range-label">{label}</span>
+      {value && <span className="tk-range-value">{value}</span>}
+      {tag && <Badge>{tag}</Badge>}
+    </div>
+  );
+}
+
 /** How a path sizes to the screen on one axis. */
 function FitRow({
   label,
@@ -42,7 +59,7 @@ function FitRow({
 }) {
   return (
     <div className="fit-row">
-      <span className="meta">{label}</span>
+      <span className="tk-range-label">{label}</span>
       <ToggleGroup
         size="sm"
         aria-label={`${label} fit`}
@@ -86,9 +103,7 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
   };
   return (
     <div className="stack placement">
-      <span className="meta">
-        Placement · {path ? `${path.points.length} points` : "not placed"}
-      </span>
+      <DetailLabel label="Placement" value={path ? `${path.points.length} points` : "Not placed"} />
       <div className="button-row">
         {drawing ? (
           <Button size="sm" variant="primary" onClick={() => setDrawing(false)}>
@@ -141,7 +156,7 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
               Flip ↕
             </Button>
             <Button size="sm" variant="danger" onClick={() => place(undefined)}>
-              Remove from screen
+              Remove from canvas
             </Button>
           </div>
           {shown && (
@@ -170,7 +185,7 @@ function PickedPoints({ path, onChange }: { path: LightPath; onChange: (p: Light
   const round = (v: number) => Math.round(v * 1000) / 10;
   return (
     <div className="stack picked">
-      <span className="meta">
+      <span className="tk-range-label">
         {one === undefined ? `${picked.length} points picked` : `Point ${one + 1}`}
       </span>
       {pt && (
@@ -257,7 +272,7 @@ function SectionEditor({
     <div className="stack">
       {device.razer && sec.count > 1 && (
         <SegmentBar
-          label={`Segments of ${name}`}
+          label={`Segments of ${name}, ${sectionName(sec, section)}`}
           ip={device.ip}
           offset={start}
           sources={sources}
@@ -266,7 +281,7 @@ function SectionEditor({
         />
       )}
       <div className="stack">
-        <span className="meta">Color · {target}</span>
+        <DetailLabel label="Color" tag={target} />
         <ColorPicker
           label={`Color for ${name}`}
           ip={device.ip}
@@ -305,136 +320,180 @@ function SectionEditor({
   );
 }
 
+/** Calibration: how well the wall matches the screen. */
+function ColorMatch({ device }: { device: AddedDevice }) {
+  const start = useStore((s) => s.startCalibration);
+  const reset = useStore((s) => s.resetCalibration);
+  const copy = useStore((s) => s.copyCalibration);
+  const twins = useStore(
+    (s) => s.devices.filter((d) => d.sku === device.sku && d.id !== device.id).length,
+  );
+  const calibrated = isCalibrated(device.calibration);
+  return (
+    <div className="stack color-match">
+      <div className="tk-range-header">
+        <span className="tk-range-label">Color match</span>
+        {calibrated ? (
+          <Badge className="success-badge">
+            <Icon name="check" />
+            Calibrated
+          </Badge>
+        ) : (
+          <Badge>Not calibrated</Badge>
+        )}
+      </div>
+      <div className="button-row">
+        <Button size="sm" onClick={() => start(device.id)}>
+          Calibrate
+        </Button>
+        {calibrated && (
+          <Button size="sm" onClick={() => reset(device.id)}>
+            Reset
+          </Button>
+        )}
+        {calibrated && twins > 0 && (
+          <Button size="sm" onClick={() => copy(device.id)}>
+            Copy to other {device.sku}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Everything about one light, and the section being edited. */
-export function Inspector({ device, section }: { device: AddedDevice; section: number }) {
-  const select = useStore((s) => s.select);
+export function Inspector({ device, section }: { device: AddedDevice; section: number | null }) {
   const rename = useStore((s) => s.renameDevice);
+  const renameSection = useStore((s) => s.renameSection);
+  const showFill = useStore((s) => s.fills[device.id] ?? true);
+  const setFill = useStore((s) => s.setFill);
   const remove = useStore((s) => s.removeDevice);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
-  const setPower = useStore((s) => s.setPower);
   const setRazer = useStore((s) => s.setRazer);
   const setSegments = useStore((s) => s.setSegments);
   const split = useStore((s) => s.splitSection);
   const merge = useStore((s) => s.mergeSections);
   // Picked segments, in the section they were picked in.
-  const [picked, setPicked] = useState<{ section: number; set: Set<number> }>({
+  const [picked, setPicked] = useState<{ section: number | null; set: Set<number> }>({
     section,
     set: new Set(),
   });
-  const name = device.name || device.sku;
   const sections = sectionsOf(device);
-  const k = Math.min(section, sections.length - 1);
+  const k = Math.min(section ?? 0, sections.length - 1);
   const starts = sectionStarts(sections);
   const count = sections[k]?.count ?? 1;
   const selected =
     picked.section === k ? [...picked.set].filter((i) => i < count).sort((a, b) => a - b) : [];
   // Split before the first picked segment, or in half.
   const cut = selected[0] ? selected[0] : undefined;
-  const range = (i: number) => {
-    const s = starts[i] as number;
-    const n = sections[i]?.count ?? 1;
-    return n > 1 ? `${s + 1}–${s + n}` : `${s + 1}`;
-  };
 
   return (
     <div className="inspector stack">
-      <header className="inspector-head">
-        <Button variant="ghost" size="sm" aria-label="Back to lights" onClick={() => select(null)}>
-          <Icon name="chevron-left" />
-          Lights
-        </Button>
-        <Switch
-          aria-label={`Power for ${name}`}
-          checked={device.on}
-          onCheckedChange={(on: boolean) => setPower(device.id, on)}
-        />
-      </header>
-      <Input
-        size="sm"
-        aria-label={`Name for ${device.id}`}
-        value={device.name}
-        onChange={(e) => rename(device.id, e.target.value)}
-      />
-      <span className="meta">
-        {device.sku} · {device.ip}
-      </span>
-      <Slider
-        label="Brightness"
-        value={device.brightness}
-        min={0}
-        max={1.5}
-        step={0.05}
-        format={pct}
-        onChange={(v) => setBrightness(device.id, v)}
-      />
-      <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
-        Razer streaming (experimental)
-      </Switch>
-      {device.razer && (
-        <Slider
-          label="Segments"
-          value={segmentCount(device)}
-          min={1}
-          max={100}
-          step={1}
-          format={String}
-          onChange={(v) => setSegments(device.id, v)}
-        />
+      {section === null && (
+        <>
+          <Input
+            size="sm"
+            aria-label={`Name for ${device.id}`}
+            value={device.name}
+            onChange={(e) => rename(device.id, e.target.value)}
+          />
+          <span className="meta">
+            {device.sku} · {device.ip}
+          </span>
+          <span className="meta">
+            {sections.length} {sections.length === 1 ? "section" : "sections"} ·{" "}
+            {segmentCount(device)} {segmentCount(device) === 1 ? "segment" : "segments"}
+          </span>
+          <Slider
+            label="Brightness"
+            value={device.brightness}
+            min={0}
+            max={1.5}
+            step={0.05}
+            format={pct}
+            onChange={(v) => setBrightness(device.id, v)}
+          />
+          <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
+            Razer streaming{" "}
+            <Badge className="experimental-tag" tone="warning">
+              Experimental
+            </Badge>
+          </Switch>
+          {device.razer && (
+            <Slider
+              label="Segments"
+              value={segmentCount(device)}
+              min={1}
+              max={100}
+              step={1}
+              format={String}
+              onChange={(v) => setSegments(device.id, v)}
+            />
+          )}
+          <ColorMatch device={device} />
+        </>
       )}
-      {device.razer && (
+      {section !== null && (
         <div className="stack">
-          <span className="meta">Sections</span>
-          <div className="section-tabs">
-            {sections.map((_, i) => (
-              <button
-                // biome-ignore lint/suspicious/noArrayIndexKey: sections are positions
-                key={i}
-                type="button"
-                className="section-tab"
-                aria-pressed={i === k}
-                aria-label={`Section ${i + 1}, segments ${range(i)}`}
-                onClick={() => select({ id: device.id, section: i })}
+          <Input
+            size="sm"
+            aria-label={`Name for section ${k + 1} of ${device.name || device.sku}`}
+            value={sections[k]?.name ?? sectionName(sections[k] as Section, k)}
+            onChange={(e) => renameSection(device.id, k, e.target.value)}
+            onBlur={() => {
+              const name = sections[k]?.name;
+              if (name !== undefined && (!name.trim() || name !== name.trim()))
+                renameSection(device.id, k, name.trim() || undefined);
+            }}
+          />
+          <DetailLabel
+            label="Segments"
+            value={`${count}${count > 1 ? ` (${(starts[k] as number) + 1}–${(starts[k] as number) + count})` : ""}`}
+          />
+          {device.razer && (
+            <div className="button-row">
+              <Button
+                size="sm"
+                disabled={count < 2}
+                onClick={() => {
+                  split(device.id, k, cut);
+                  setPicked({ section: k, set: new Set() });
+                }}
               >
-                <span>{i + 1}</span>
-                <span className="meta">{range(i)}</span>
-              </button>
-            ))}
-          </div>
-          <div className="button-row">
-            <Button
-              size="sm"
-              disabled={count < 2}
-              onClick={() => {
-                split(device.id, k, cut);
-                setPicked({ section: k, set: new Set() });
-              }}
-            >
-              {cut ? `Split before ${(starts[k] as number) + cut + 1}` : "Split in half"}
-            </Button>
-            <Button
-              size="sm"
-              disabled={k >= sections.length - 1}
-              onClick={() => merge(device.id, k)}
-            >
-              Merge with next
-            </Button>
-          </div>
+                {cut ? `Split before ${(starts[k] as number) + cut + 1}` : "Split in half"}
+              </Button>
+              <Button
+                size="sm"
+                disabled={k >= sections.length - 1}
+                onClick={() => merge(device.id, k)}
+              >
+                Merge with next
+              </Button>
+            </div>
+          )}
         </div>
       )}
-      <SectionEditor
-        device={device}
-        section={k}
-        selected={selected}
-        onSelect={(set) => setPicked({ section: k, set })}
-      />
-      <div className="button-row inspector-actions">
-        <Button size="sm" onClick={() => api.identifyDevice(device.ip).catch(() => {})}>
-          Identify
-        </Button>
-        <Button size="sm" variant="danger" onClick={() => remove(device.id)}>
-          Remove light
-        </Button>
-      </div>
+      {section !== null && (
+        <SectionEditor
+          device={device}
+          section={k}
+          selected={selected}
+          onSelect={(set) => setPicked({ section: k, set })}
+        />
+      )}
+      <Switch checked={showFill} onCheckedChange={(on: boolean) => setFill(device.id, on)}>
+        Show fill
+      </Switch>
+      {section === null && (
+        <div className="button-row inspector-actions">
+          <Button size="sm" onClick={() => api.identifyDevice(device.ip).catch(() => {})}>
+            Identify
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => remove(device.id)}>
+            Remove light
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,19 +1,26 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { type PersistStorage, persist, type StorageValue } from "zustand/middleware";
 import { api } from "./lib/api";
+import { resolveCalibration, type Step, testColor, withStep } from "./lib/calibration";
+import { rgbHex } from "./lib/colors";
 import {
   mergeSections,
   sectionStarts,
   sectionsOf,
+  segmentCount,
   segmentSources,
   splitSection,
 } from "./lib/lights";
-import { edgeLoop, type OldZone, resolvePath, zonePath } from "./lib/path";
+import { linePath, type OldZone, resolvePath, zonePath } from "./lib/path";
+import { readSetupText, SETUP_FILE_NAME, setupText } from "./lib/setupFile";
+import { forget, readSaved, saveLater } from "./lib/storage";
 import type {
   AddedDevice,
+  CanvasSource,
   EngineConfig,
   EngineStatus,
   GoveeDevice,
+  Hex,
   LightPath,
   MonitorInfo,
   Rgb,
@@ -27,13 +34,25 @@ import type {
 export const DEFAULT_SETTINGS: Settings = {
   fps: 30,
   monitor: 0,
+  canvas: "screen",
   tuning: { saturation: 1.3, brightness: 1, smoothing: 0.5 },
 };
 
-/** The section being edited. */
+/** Saved-state version. Bump it, and add to `migrate`, when the saved shape changes. */
+const VERSION = 8;
+
+/** A whole light (`section: null`) or one of its paths. */
 export interface Selection {
   id: string;
-  section: number;
+  section: number | null;
+}
+
+/** The light being calibrated, and how far along. */
+export interface Calibrating {
+  id: string;
+  step: Step;
+  /** Send the test color uncalibrated, to compare. */
+  raw: boolean;
 }
 
 interface AppState {
@@ -48,6 +67,11 @@ interface AppState {
   monitors: MonitorInfo[];
   status: EngineStatus;
   selection: Selection | null;
+  hoveredLight: string | null;
+  hoveredSection: number | null;
+  fills: Record<string, boolean>;
+  setFill: (id: string, visible: boolean) => void;
+  setHoveredLight: (id: string | null, section?: number) => void;
   /** Clicks on the screen add points to the selected section. */
   drawing: boolean;
   /** Picked points of the selected section's path. */
@@ -55,16 +79,20 @@ interface AppState {
   /** Layout and color edits to undo, oldest first, and ones undone to redo. */
   past: Snapshot[];
   future: Snapshot[];
+  /** While set, the light shows test colors and the screen shows them too. */
+  calibrating: Calibrating | null;
 
   scan: () => Promise<void>;
   loadMonitors: () => Promise<void>;
-  /** Add a light around the screen's edge, and select it. */
+  /** Add a light across the screen's middle, and select it. */
   addDevice: (d: GoveeDevice) => void;
   removeDevice: (id: string) => void;
   renameDevice: (id: string, name: string) => void;
+  renameSection: (id: string, section: number, name?: string) => void;
   setDeviceBrightness: (id: string, brightness: number) => void;
   /** Switch one light on or off, right away and for sync. */
   setPower: (id: string, on: boolean) => void;
+  setSectionPower: (id: string, section: number, on: boolean) => void;
   setRazer: (id: string, on: boolean) => void;
   setSegments: (id: string, segments: number) => void;
   /** Color a whole section. Clears its segment overrides. */
@@ -83,10 +111,13 @@ interface AppState {
   /** Start or stop drawing. Stopping drops a path left with under two points. */
   setDrawing: (on: boolean) => void;
   setEnabled: (on: boolean) => void;
+  /** Switch every light on or off; turning them off also stops syncing. */
+  setAllPower: (on: boolean) => Promise<void>;
   /** Stop syncing and switch every light off. */
   lightsOff: () => Promise<void>;
   setFps: (fps: number) => void;
   setMonitor: (index: number) => void;
+  setCanvas: (canvas: CanvasSource) => void;
   setTuning: (t: Partial<Tuning>) => void;
   resetTuning: () => void;
   /** Undo or redo the last layout or color edit. */
@@ -94,6 +125,23 @@ interface AppState {
   redo: () => void;
   /** End the current edit, so the next change is its own undo step. */
   breakUndo: () => void;
+  /** Start calibrating a light, switching it on if it's off. */
+  startCalibration: (id: string) => void;
+  /** Move to another step, or compare with the uncalibrated color. */
+  updateCalibrating: (patch: Partial<Omit<Calibrating, "id">>) => void;
+  stopCalibration: () => void;
+  /** Set one step's match, or clear it with undefined. */
+  setCalibration: (id: string, step: Step, value: Hex | number | undefined) => void;
+  resetCalibration: (id: string) => void;
+  /** Give the light's calibration to every other light of the same model. */
+  copyCalibration: (id: string) => void;
+  /** Save the lights and canvas settings to a file the user picks. False if cancelled. */
+  exportSetup: () => Promise<boolean>;
+  /**
+   * Replace the lights and canvas settings with a file the user picks. False
+   * if cancelled; throws with a message fit to show if the file is bad.
+   */
+  importSetup: () => Promise<boolean>;
 }
 
 /** Each light's sections and colors, for undo. */
@@ -125,6 +173,28 @@ export const screenAspect = () => {
 export const useScreenAspect = () =>
   useScreen((s) => (s.image ? s.image.width / s.image.height : 16 / 9));
 
+/**
+ * Saves once edits settle, and only when the saved part changed: most updates
+ * (hover, selection, engine status) don't touch it.
+ */
+function settledStorage<S extends object>(): PersistStorage<S> {
+  let last: S | undefined;
+  return {
+    getItem: (name) => {
+      const raw = readSaved(name);
+      return raw ? (JSON.parse(raw) as StorageValue<S>) : null;
+    },
+    setItem: (name, value) => {
+      const s = value.state;
+      const was = last;
+      if (was && (Object.keys(s) as (keyof S)[]).every((k) => s[k] === was[k])) return;
+      last = s;
+      saveLater(name, () => JSON.stringify(value));
+    },
+    removeItem: forget,
+  };
+}
+
 export const useStore = create<AppState>()(
   persist(
     (set, get) => {
@@ -153,7 +223,7 @@ export const useStore = create<AppState>()(
       /** Stop drawing. A path left with under two points is dropped. */
       const endDrawing = () => {
         const { drawing, selection } = get();
-        if (!drawing || !selection) return;
+        if (!drawing || !selection || selection.section === null) return;
         editSections(selection.id, (sections) =>
           sections.map((s, k) =>
             k === selection.section && s.path && s.path.points.length < 2
@@ -174,10 +244,17 @@ export const useStore = create<AppState>()(
         monitors: [],
         status: { running: false, error: null },
         selection: null,
+        hoveredLight: null,
+        hoveredSection: null,
+        fills: {},
+        setFill: (id, visible) => set((s) => ({ fills: { ...s.fills, [id]: visible } })),
+        setHoveredLight: (hoveredLight, section) =>
+          set({ hoveredLight, hoveredSection: section ?? null }),
         drawing: false,
         points: [],
         past: [],
         future: [],
+        calibrating: null,
 
         scan: async () => {
           if (get().scanning) return;
@@ -221,10 +298,10 @@ export const useStore = create<AppState>()(
                       on: true,
                       brightness: 1,
                       razer: false,
-                      sections: [{ count: 1, color: "path", path: edgeLoop(screenAspect(), 0.12) }],
+                      sections: [{ count: 1, color: "path", path: linePath() }],
                     },
                   ],
-                  selection: { id: d.id, section: 0 },
+                  selection: { id: d.id, section: null },
                   drawing: false,
                   points: [],
                 },
@@ -237,6 +314,11 @@ export const useStore = create<AppState>()(
             points: s.selection?.id === id ? [] : s.points,
           })),
         renameDevice: (id, name) => edit(id, (d) => ({ ...d, name })),
+        renameSection: (id, section, name) =>
+          edit(id, (d) => ({
+            ...d,
+            sections: d.sections.map((s, k) => (k === section ? { ...s, name } : s)),
+          })),
         setDeviceBrightness: (id, brightness) => edit(id, (d) => ({ ...d, brightness })),
         setPower: (id, on) => {
           edit(id, (d) => ({ ...d, on }));
@@ -247,13 +329,20 @@ export const useStore = create<AppState>()(
           edit(id, (d) => ({ ...d, razer }));
           // Without razer mode a light is one section: keep the selection on it.
           const sel = get().selection;
-          if (!razer && sel?.id === id) set({ selection: { id, section: 0 } });
+          if (!razer && sel?.id === id && sel.section !== null)
+            set({ selection: { id, section: 0 }, points: [], drawing: false });
+        },
+        setSectionPower: (id, section, on) => {
+          record();
+          editSections(id, (sections) =>
+            sections.map((s, k) => (k === section ? { ...s, on } : s)),
+          );
         },
         setSegments: (id, segments) => {
           edit(id, (d) => ({ ...d, segments }));
           const sel = get().selection;
           const d = get().devices.find((x) => x.id === id);
-          if (d && sel?.id === id && sel.section >= sectionsOf(d).length) {
+          if (d && sel?.id === id && sel.section !== null && sel.section >= sectionsOf(d).length) {
             set({ selection: { id, section: sectionsOf(d).length - 1 } });
           }
         },
@@ -302,7 +391,7 @@ export const useStore = create<AppState>()(
           record();
           editSections(id, (sections) => mergeSections(sections, section));
           const sel = get().selection;
-          if (sel?.id === id && sel.section > section) {
+          if (sel?.id === id && sel.section !== null && sel.section > section) {
             set({ selection: { id, section: sel.section - 1 }, drawing: false, points: [] });
           }
         },
@@ -311,22 +400,33 @@ export const useStore = create<AppState>()(
           const same =
             selection?.id === get().selection?.id &&
             selection?.section === get().selection?.section;
-          set({ selection, drawing: false, points: same ? get().points : [] });
+          set({ selection, hoveredLight: null, drawing: false, points: same ? get().points : [] });
         },
         setPoints: (points) => set({ points }),
         setDrawing: (drawing) => {
           if (!drawing) return endDrawing();
+          if (get().selection?.section == null) return;
           // The whole drawing is one undo step.
           record();
           set({ drawing, points: [] });
         },
         setEnabled: (enabled) => set({ enabled }),
+        setAllPower: async (on) => {
+          if (!on) return get().lightsOff();
+          const devices = get().devices;
+          set({ devices: devices.map((d) => ({ ...d, on: true })) });
+          await Promise.all(devices.map((d) => api.setPower(d.ip, true)));
+        },
         lightsOff: async () => {
-          set({ enabled: false });
+          set((s) => ({
+            enabled: false,
+            devices: s.devices.map((d) => ({ ...d, on: false })),
+          }));
           await api.lightsOff(get().devices.map((d) => d.ip));
         },
         setFps: (fps) => set((s) => ({ settings: { ...s.settings, fps } })),
         setMonitor: (monitor) => set((s) => ({ settings: { ...s.settings, monitor } })),
+        setCanvas: (canvas) => set((s) => ({ settings: { ...s.settings, canvas } })),
         setTuning: (t) =>
           set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
         resetTuning: () =>
@@ -358,13 +458,67 @@ export const useStore = create<AppState>()(
         breakUndo: () => {
           lastKey = null;
         },
+        startCalibration: (id) => {
+          const d = get().devices.find((x) => x.id === id);
+          if (!d) return;
+          endDrawing();
+          if (!d.on) get().setPower(id, true);
+          set({ calibrating: { id, step: "white", raw: false } });
+        },
+        updateCalibrating: (patch) =>
+          set((s) => (s.calibrating ? { calibrating: { ...s.calibrating, ...patch } } : s)),
+        stopCalibration: () => set({ calibrating: null }),
+        setCalibration: (id, step, value) =>
+          edit(id, (d) => ({ ...d, calibration: withStep(d.calibration, step, value) })),
+        resetCalibration: (id) => edit(id, (d) => ({ ...d, calibration: undefined })),
+        copyCalibration: (id) =>
+          set((s) => {
+            const from = s.devices.find((d) => d.id === id);
+            if (!from) return s;
+            return {
+              devices: s.devices.map((d) =>
+                d.sku === from.sku && d.id !== id ? { ...d, calibration: from.calibration } : d,
+              ),
+            };
+          }),
+        exportSetup: async () => {
+          const { devices, settings } = get();
+          return api.exportSetup(SETUP_FILE_NAME, setupText({ devices, settings }, VERSION));
+        },
+        importSetup: async () => {
+          const text = await api.importSetup();
+          if (text === null) return false;
+          const { state, version } = readSetupText(text, VERSION);
+          const { devices, settings } = migrate(state, version);
+          endDrawing();
+          lastKey = null;
+          set({
+            devices,
+            settings: {
+              ...DEFAULT_SETTINGS,
+              ...settings,
+              tuning: { ...DEFAULT_SETTINGS.tuning, ...settings.tuning },
+            },
+            selection: null,
+            drawing: false,
+            points: [],
+            // Undo steps belong to the lights just replaced.
+            past: [],
+            future: [],
+            calibrating: null,
+          });
+          // The lights may have moved on the network since the file was saved.
+          void get().scan();
+          return true;
+        },
       };
     },
     {
       name: "tk-light-mini",
-      version: 7,
+      version: VERSION,
       migrate: (old, version) => migrate(old, version),
       partialize: (s) => ({ devices: s.devices, enabled: s.enabled, settings: s.settings }),
+      storage: settledStorage(),
     },
   ),
 );
@@ -417,6 +571,10 @@ export function migrate(old: unknown, version: number): AppState {
     const { depth: _, ...tuning } = s.settings.tuning;
     s.settings = { ...s.settings, tuning };
   }
+  // v8: the lights follow a canvas, the screen until picked otherwise.
+  if (version < 8 && s.settings) {
+    s.settings = { ...s.settings, canvas: s.settings.canvas ?? "screen" };
+  }
   return s as unknown as AppState;
 }
 
@@ -427,27 +585,72 @@ export function migrate(old: unknown, version: number): AppState {
 export const useLive = create<{ paths: Record<string, Rgb[]> }>(() => ({ paths: {} }));
 
 /**
- * The engine's small screen frame: the one capture, shared by every component.
- * Updated about 4 times a second while the window is visible.
+ * The engine's small canvas frame: the screen capture or a painted scene,
+ * shared by every component. Updated 4 to 10 times a second while the window
+ * is visible.
  */
 export const useScreen = create<{ image: ScreenImage | null }>(() => ({ image: null }));
 
-/** What the engine needs, with paths fitted to a screen `aspect` wide. */
+type EngineDevice = EngineConfig["devices"][number];
+
+/**
+ * A light while calibrating: every segment shows `color`, calibrated unless
+ * `raw`, and nothing is sampled.
+ */
+function testDevice(d: AddedDevice, color: Hex, raw: boolean): EngineDevice {
+  return {
+    ip: d.ip,
+    brightness: d.brightness,
+    razer: d.razer,
+    segments: Array(segmentCount(d)).fill(color),
+    sections: sectionsOf(d).map((s) => ({ path: null, count: s.count })),
+    calibration: resolveCalibration(raw ? undefined : d.calibration),
+  };
+}
+
+/**
+ * What the engine needs, with paths fitted to a screen `aspect` wide.
+ *
+ * While calibrating, the light shows the step's test color, even with sync
+ * off. With sync on, the other lights go dark, so only its glow is on the wall.
+ */
 export function toEngineConfig(
-  s: Pick<AppState, "enabled" | "settings" | "devices">,
+  s: Pick<AppState, "enabled" | "settings" | "devices"> & Partial<Pick<AppState, "calibrating">>,
   aspect = 16 / 9,
 ): EngineConfig {
-  return {
-    enabled: s.enabled,
+  const cal = s.calibrating;
+  const testing = cal ? s.devices.find((d) => d.id === cal.id) : undefined;
+  const base = {
+    enabled: s.enabled || testing !== undefined,
     fps: s.settings.fps,
     monitor: s.settings.monitor,
+    canvas: s.settings.canvas,
     tuning: s.settings.tuning,
+  };
+  if (cal && testing) {
+    const others = s.enabled ? s.devices.filter((d) => d.on && d !== testing) : [];
+    return {
+      ...base,
+      devices: [
+        testDevice(testing, rgbHex(testColor(cal.step)), cal.raw),
+        ...others.map((d) => testDevice(d, "#000000", true)),
+      ],
+    };
+  }
+  return {
+    ...base,
     devices: s.devices
       .filter((d) => d.on)
       .map((d) => {
         const segments = segmentSources(d);
         const sections = sectionsOf(d);
         const starts = sectionStarts(sections);
+        sections.forEach((section, k) => {
+          if (section.on === false) {
+            const start = starts[k] ?? 0;
+            segments.fill("#000000", start, start + section.count);
+          }
+        });
         return {
           ip: d.ip,
           brightness: d.brightness,
@@ -459,6 +662,7 @@ export function toEngineConfig(
             const path = used && sec.path ? resolvePath(sec.path, aspect) : null;
             return { path, count: sec.count };
           }),
+          calibration: resolveCalibration(d.calibration),
         };
       }),
   };

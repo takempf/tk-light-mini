@@ -281,4 +281,80 @@ mod live {
         s.pt_real(a, &[segment_white(4000, kelvin_rgb(4000), all)]);
         pause();
     }
+
+    /// Streams one color in razer mode for `secs`.
+    fn razer_hold(s: &mut Sender, a: std::net::SocketAddr, c: Rgb, n: usize, secs: u64) {
+        s.razer_mode(a, true);
+        for _ in 0..secs * 20 {
+            s.razer_colors(a, &vec![c; n]);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        s.razer_mode(a, false);
+    }
+
+    /// Which paths light the white LEDs? Each step holds 6 s. Real white LEDs
+    /// look brighter and cleaner; RGB white looks bluish or pinkish.
+    /// `GOVEE_SEGMENTS` sets the razer segment count (default 12).
+    #[test]
+    #[ignore]
+    fn live_pt_white_ab() {
+        let a = addr();
+        let n: usize = std::env::var("GOVEE_SEGMENTS").map_or(12, |v| v.parse().unwrap());
+        let all = u64::MAX >> 8;
+        let hold = || std::thread::sleep(Duration::from_secs(6));
+        let mut s = Sender::new().unwrap();
+        s.turn(a, true);
+        s.brightness(a, 100);
+        let warm = kelvin_rgb(2700);
+
+        println!("1. colorwc RGB 255,255,255 (sync without razer)");
+        s.color(a, [255; 3]);
+        hold();
+        println!("2. razer RGB 255,255,255 (sync with razer)");
+        razer_hold(&mut s, a, [255; 3], n, 6);
+        println!("3. colorwc 6500 K (firmware white mode)");
+        s.color_temp(a, 6500);
+        hold();
+        println!("4. ptReal segment white 6500 K");
+        s.pt_real(a, &[segment_white(6500, kelvin_rgb(6500), all)]);
+        hold();
+        println!("5. colorwc 2700 K");
+        s.color_temp(a, 2700);
+        hold();
+        println!("6. ptReal segment white 2700 K");
+        s.pt_real(a, &[segment_white(2700, warm, all)]);
+        hold();
+        println!("7. razer RGB {warm:?} (2700 K made from RGB)");
+        razer_hold(&mut s, a, warm, n, 6);
+        println!("8. colorwc RGB {warm:?}");
+        s.color(a, warm);
+        hold();
+    }
+
+    /// Can white segments sit next to razer colors? Streams red in razer mode,
+    /// then, mid-stream, sends ptReal white to the first half. Watch whether
+    /// the first half turns white, and whether it stays white or snaps back.
+    #[test]
+    #[ignore]
+    fn live_pt_white_in_razer() {
+        let a = addr();
+        let n: usize = std::env::var("GOVEE_SEGMENTS").map_or(12, |v| v.parse().unwrap());
+        let half = (1u64 << (n / 2)) - 1;
+        let mut s = Sender::new().unwrap();
+        s.turn(a, true);
+        s.brightness(a, 100);
+        s.razer_mode(a, true);
+        for i in 0..200 {
+            if i == 60 {
+                println!("ptReal white to segments 0..{}", n / 2);
+                s.pt_real(a, &[segment_white(4000, kelvin_rgb(4000), half)]);
+            }
+            if i % 20 == 0 {
+                println!("{:.0} s", i as f32 / 20.0);
+            }
+            s.razer_colors(a, &vec![[255, 0, 0]; n]);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        s.razer_mode(a, false);
+    }
 }
