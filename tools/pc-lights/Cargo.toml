@@ -1,0 +1,14 @@
+[package]
+name = "pc-lights"
+version = "0.1.0"
+description = "Test CLI: find and color the RGB lights inside this PC"
+edition = "2021"
+publish = false
+
+# Standalone: not part of the app build.
+[workspace]
+
+[dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+libloading = "0.9.0"
+windows = { version = "0.62", features = ["Devices_Lights", "Devices_Enumeration", "Foundation", "Foundation_Collections", "UI"] }
