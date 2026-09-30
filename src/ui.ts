@@ -4,6 +4,7 @@
 */
 export { Button } from "tk-design-system/source/components/Button.tsx";
 export { Switch } from "tk-design-system/source/components/Choice.tsx";
+export { Dialog } from "tk-design-system/source/components/Dialog.tsx";
 export { Accordion } from "tk-design-system/source/components/Disclosure.tsx";
 export { Input } from "tk-design-system/source/components/Field.tsx";
 export { Menu } from "tk-design-system/source/components/Menu.tsx";

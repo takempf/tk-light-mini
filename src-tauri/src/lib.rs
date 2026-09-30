@@ -5,11 +5,13 @@ mod color;
 mod engine;
 mod govee;
 mod icue;
+mod instance;
 mod paths;
 mod preview;
 #[cfg(test)]
 mod ptreal;
 mod setup_file;
+mod startup;
 mod visuals;
 
 use std::time::Duration;
@@ -45,9 +47,21 @@ fn set_config(engine: State<'_, Engine>, config: EngineConfig) {
 
 /// While the window is visible, the engine captures (even with sync off) and
 /// keeps live colors and the small screen image for `next_preview`.
+/// A window started hidden may still call itself visible; that's ignored.
 #[tauri::command]
-fn set_preview(engine: State<'_, Engine>, enabled: bool) {
-    engine.set_preview(enabled);
+fn set_preview(window: Window, engine: State<'_, Engine>, enabled: bool) {
+    engine.set_preview(enabled && window.is_visible().unwrap_or(true));
+}
+
+/// Whether the app starts with Windows.
+#[tauri::command]
+fn autostart() -> bool {
+    startup::enabled()
+}
+
+#[tauri::command]
+fn set_autostart(on: bool) -> Result<(), String> {
+    startup::set(on)
 }
 
 /// Engine status, live colors and the screen image that changed after `after`,
@@ -203,10 +217,13 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     let builder = tauri::Builder::default();
     // One copy at a time: two engines would fight over the lights.
-    // A second launch shows the running window instead. Must be registered first.
+    // A second launch shows the running window instead, unless it's the one
+    // at sign-in. Must be registered first. `instance` backs it up.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-        show_window(app)
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _| {
+        if !args.iter().any(|a| a == startup::HIDDEN_ARG) {
+            show_window(app)
+        }
     }));
     // Register before configured windows are created so the plugin can track them.
     #[cfg(desktop)]
@@ -223,10 +240,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Engine::default())
         .setup(|app| {
+            instance::exit_if_another(&app.config().identifier);
             #[cfg(desktop)]
             {
                 setup_tray(app)?;
                 app_icon::follow(app.handle().clone(), app.state::<Engine>().icon());
+            }
+            // The window starts hidden. At sign-in it stays in the tray.
+            if !std::env::args().any(|a| a == startup::HIDDEN_ARG) {
+                show_window(app.handle());
             }
             Ok(())
         })
@@ -251,7 +273,9 @@ pub fn run() {
             set_power,
             lights_off,
             setup_file::export_setup,
-            setup_file::import_setup
+            setup_file::import_setup,
+            autostart,
+            set_autostart
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

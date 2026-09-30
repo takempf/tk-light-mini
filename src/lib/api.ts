@@ -17,6 +17,9 @@ export const api = {
   exportSetup: (name: string, text: string) => invoke<boolean>("export_setup", { name, text }),
   /** Ask for a setup file and read it. Null if cancelled. */
   importSetup: () => invoke<string | null>("import_setup"),
+  /** Whether the app starts with Windows, hidden in the tray. */
+  autostart: () => invoke<boolean>("autostart"),
+  setAutostart: (on: boolean) => invoke<void>("set_autostart", { on }),
   /**
    * What changed in the engine's status, live colors and screen image after
    * `after`. Waits up to a second for something to. Raw bytes, not an event:

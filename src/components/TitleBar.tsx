@@ -4,7 +4,8 @@ import bigIcon from "../../src-tauri/icons/128x128.png";
 import { api } from "../lib/api";
 import { flushSaves } from "../lib/storage";
 import { useScreen, useStore } from "../store";
-import { Switch } from "../ui";
+import { Logo, Switch } from "../ui";
+import { AppSettings } from "./AppSettings";
 
 /** Windows caption glyphs, drawn on the same 16-unit grid as tk icons. */
 const GLYPHS = {
@@ -151,7 +152,10 @@ export function TitleBar() {
     <header className="titlebar" data-tauri-drag-region data-focused={focused || undefined}>
       <div className="titlebar-brand">
         <TitleIcon />
-        <span>light mini</span>
+        <span className="titlebar-name">
+          <Logo label="" className="titlebar-logo" />
+          <span>light mini</span>
+        </span>
       </div>
       <div className="titlebar-actions">
         <TitleToggle
@@ -161,6 +165,7 @@ export function TitleBar() {
           onChange={(on) => void setAllPower(on).catch((e) => console.error("set_all_power", e))}
         />
         <TitleToggle label="Syncing" checked={enabled} onChange={setEnabled} />
+        <AppSettings />
       </div>
       <div className="window-controls">
         <button type="button" aria-label="Minimize" onClick={() => api.minimize().catch(() => {})}>

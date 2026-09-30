@@ -52,6 +52,17 @@ body {
   height: 24px;
   flex: none;
 }
+/* The tk mark beside the name, like a brand: the name's cap height and color. */
+.titlebar-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+}
+.titlebar-logo {
+  flex: none;
+  height: 0.72em;
+  width: auto;
+}
 .titlebar-actions {
   display: flex;
   align-items: center;
@@ -899,6 +910,19 @@ body {
 }
 
 /* Settings -------------------------------------------------------------- */
+
+.app-settings {
+  width: min(100%, 24rem);
+}
+.setting-hint {
+  margin: var(--tk-space-1) 0 0;
+  color: var(--tk-fg-muted);
+  font-size: var(--tk-text-sm);
+}
+.app-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 
 .shortcuts {
   width: 24rem;

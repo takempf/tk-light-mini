@@ -393,7 +393,6 @@ describe("App", () => {
   it("tunes the canvas from the sidebar", async () => {
     const user = userEvent.setup();
     render(<App />);
-    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Canvas" }));
     fireEvent.change(await screen.findByRole("slider", { name: "Saturation" }), {
       target: { value: "2" },

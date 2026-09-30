@@ -41,6 +41,8 @@ export function mockApiModule() {
       lightsOff: vi.fn(async () => {}),
       exportSetup: vi.fn(async (_name: string, _text: string) => true),
       importSetup: vi.fn(async (): Promise<string | null> => null),
+      autostart: vi.fn(async () => false),
+      setAutostart: vi.fn(async (_on: boolean) => {}),
       nextPreview: vi.fn(nextPreview),
       minimize: vi.fn(async () => {}),
       toggleMaximize: vi.fn(async () => {}),
