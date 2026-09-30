@@ -29,6 +29,9 @@ pub struct Device {
     pub id: String,
     pub ip: String,
     pub sku: String,
+    /// Segments a new light starts with, when the device knows (iCUE lights).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segments: Option<usize>,
 }
 
 /// Parse a scan reply. Returns `None` for anything that is not one.
@@ -47,6 +50,7 @@ pub fn parse_scan_reply(buf: &[u8]) -> Option<Device> {
             .and_then(|s| s.as_str())
             .unwrap_or("")
             .to_string(),
+        segments: None,
     })
 }
 
@@ -277,7 +281,7 @@ impl Sender {
 }
 
 /// Hot pink: nothing in a typical scene looks like it.
-const IDENTIFY_COLOR: Rgb = [255, 0, 150];
+pub const IDENTIFY_COLOR: Rgb = [255, 0, 150];
 const IDENTIFY_PULSES: u32 = 3;
 const IDENTIFY_PERIOD: Duration = Duration::from_millis(800);
 const IDENTIFY_STEP: Duration = Duration::from_millis(40);
@@ -286,7 +290,7 @@ pub const IDENTIFY_DURATION: Duration =
     Duration::from_millis(IDENTIFY_PERIOD.as_millis() as u64 * IDENTIFY_PULSES as u64);
 
 /// Pulse level at `t` seconds: 0 → 1 → 0 once per period, eased at both ends.
-fn pulse_level(t: f32) -> f32 {
+pub fn pulse_level(t: f32) -> f32 {
     (std::f32::consts::PI * t / IDENTIFY_PERIOD.as_secs_f32())
         .sin()
         .powi(2)
@@ -335,6 +339,7 @@ mod tests {
                 id: "1F:80:C5:32:32:36:72:4E".into(),
                 ip: "192.168.1.23".into(),
                 sku: "H618E".into(),
+                segments: None,
             })
         );
     }

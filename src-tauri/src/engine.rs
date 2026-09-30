@@ -14,6 +14,7 @@ use crate::calibration::Calibration;
 use crate::capture::{list_monitors, CaptureError, Capturer};
 use crate::color::{content_rect, Frame, Rect, Rgb, Smoother, Tuning};
 use crate::govee::{control_addr, Sender};
+use crate::icue;
 use crate::paths::{PathConfig, PathSampler};
 use crate::preview::Preview;
 use crate::visuals::{canvas_size, phthalo, Canvas, Painter};
@@ -56,6 +57,24 @@ impl<'de> Deserialize<'de> for Source {
             .and_then(parse_hex)
             .map(Source::Fixed)
             .ok_or_else(|| D::Error::custom(format!("bad color {s}")))
+    }
+}
+
+/// Where a light's colors go.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Dest {
+    /// A Govee light on the network.
+    Lan(SocketAddr),
+    /// A light inside this PC, by iCUE's device id.
+    Icue(Arc<str>),
+}
+
+impl Dest {
+    /// From the app's `ip`: an address, or an iCUE light's id.
+    pub fn parse(ip: &str) -> Option<Self> {
+        icue::device_id(ip)
+            .map(|d| Dest::Icue(d.into()))
+            .or_else(|| control_addr(ip).map(Dest::Lan))
     }
 }
 
@@ -152,7 +171,7 @@ struct Shared {
     /// A tiny canvas for the app icon while running.
     icon: Arc<app_icon::Latest>,
     /// Lights the engine leaves alone until the given time (while identifying).
-    held: Mutex<Vec<(SocketAddr, Instant)>>,
+    held: Mutex<Vec<(Dest, Instant)>>,
 }
 
 pub struct Engine {
@@ -245,12 +264,12 @@ impl Engine {
             && !self.shared.stop.load(Ordering::Acquire)
     }
 
-    /// Stop sending to `addr` for `d`, then resend its color.
-    pub fn hold(&self, addr: SocketAddr, d: Duration) {
+    /// Stop sending to `dest` for `d`, then resend its color.
+    pub fn hold(&self, dest: Dest, d: Duration) {
         let until = Instant::now() + d;
         let mut held = self.shared.held.lock();
-        held.retain(|(a, _)| *a != addr);
-        held.push((addr, until));
+        held.retain(|(a, _)| *a != dest);
+        held.push((dest, until));
     }
 
     pub fn shutdown(&self) {
@@ -266,7 +285,7 @@ impl Engine {
 }
 
 struct Target {
-    addr: SocketAddr,
+    dest: Dest,
     ip: String,
     /// One per segment.
     sources: Vec<Source>,
@@ -358,9 +377,9 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
     cfg.devices
         .iter()
         .filter_map(|d| {
-            let addr = control_addr(&d.ip)?;
+            let dest = Dest::parse(&d.ip)?;
             let mut t = Target {
-                addr,
+                dest: dest.clone(),
                 ip: d.ip.clone(),
                 sources: d.segments.clone(),
                 calibration: d.calibration,
@@ -384,7 +403,7 @@ fn build_targets(cfg: &EngineConfig, old: &mut [Target]) -> Vec<Target> {
                 path_colors: Vec::new(),
                 scratch: Vec::new(),
             };
-            if let Some(p) = old.iter_mut().find(|o| o.addr == addr) {
+            if let Some(p) = old.iter_mut().find(|o| o.dest == dest) {
                 t.streaming = d.razer && p.streaming;
                 if p.sources == t.sources && p.razer == d.razer {
                     t.last = p.last;
@@ -423,12 +442,26 @@ fn changed(a: Rgb, b: Rgb) -> bool {
     (0..3).any(|i| a[i].abs_diff(b[i]) >= MIN_DELTA)
 }
 
-/// Lights streaming in `old` that stop streaming in `new`.
+/// Network lights streaming in `old` that stop streaming in `new`.
 fn stopped_streams(old: &[Target], new: &[Target]) -> Vec<SocketAddr> {
     old.iter()
-        .filter(|o| o.streaming && !new.iter().any(|n| n.addr == o.addr && n.streaming))
-        .map(|o| o.addr)
+        .filter(|o| o.streaming && !new.iter().any(|n| n.dest == o.dest && n.streaming))
+        .filter_map(|o| match o.dest {
+            Dest::Lan(addr) => Some(addr),
+            Dest::Icue(_) => None,
+        })
         .collect()
+}
+
+/// Every segment's color as sent: resolved, calibrated and dimmed.
+fn segment_output(t: &Target, out: &mut Vec<Rgb>) {
+    out.clear();
+    out.extend(
+        t.sources
+            .iter()
+            .enumerate()
+            .map(|(i, s)| output(t, s.resolve(&t.path_colors, i))),
+    );
 }
 
 #[cfg(windows)]
@@ -485,6 +518,7 @@ fn run(shared: Arc<Shared>) {
         Ok(s) => s,
         Err(e) => return emit_status(Some(format!("network: {e}"))),
     };
+    let mut pcs = icue::Outputs::default();
 
     let mut cfg = EngineConfig::default();
     let mut generation = u64::MAX;
@@ -636,41 +670,45 @@ fn run(shared: Arc<Shared>) {
             t.smooth_path(dt, cfg.tuning.smoothing);
         }
 
-        let held: Vec<SocketAddr> = {
+        let held: Vec<Dest> = {
             let mut h = shared.held.lock();
             h.retain(|(_, until)| *until > tick);
-            h.iter().map(|(a, _)| *a).collect()
+            h.iter().map(|(a, _)| a.clone()).collect()
         };
         for t in targets.iter_mut().filter(|_| cfg.enabled) {
-            if held.contains(&t.addr) {
+            if held.contains(&t.dest) {
                 // Let identify's plain color commands through.
-                if t.streaming {
-                    sender.razer_mode(t.addr, false);
+                if let (true, &Dest::Lan(addr)) = (t.streaming, &t.dest) {
+                    sender.razer_mode(addr, false);
                     t.streaming = false;
                 }
                 t.last = None;
                 continue;
             }
+            let addr = match &t.dest {
+                Dest::Lan(addr) => *addr,
+                Dest::Icue(device) => {
+                    // Every segment, every frame: its thread skips what it
+                    // can't keep up with, and what didn't change.
+                    segment_output(t, &mut segment_colors);
+                    pcs.send(device, &segment_colors);
+                    continue;
+                }
+            };
             if t.power_due(tick) {
-                sender.turn(t.addr, true);
+                sender.turn(addr, true);
                 t.power_at = Some(tick);
                 t.power_tries = t.power_tries.saturating_add(1);
             }
             if t.razer {
                 if !t.streaming {
-                    sender.razer_mode(t.addr, true);
+                    sender.razer_mode(addr, true);
                     t.streaming = true;
                 }
-                segment_colors.clear();
-                segment_colors.extend(
-                    t.sources
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| output(t, s.resolve(&t.path_colors, i))),
-                );
+                segment_output(t, &mut segment_colors);
                 // Every frame: there's no fade to hide gaps, and it keeps the
                 // stream alive.
-                sender.razer_colors(t.addr, &segment_colors);
+                sender.razer_colors(addr, &segment_colors);
                 t.sent_at = tick;
                 continue;
             }
@@ -681,7 +719,7 @@ fn run(shared: Arc<Shared>) {
             let c = output(t, c);
             let due = t.last.is_none_or(|l| changed(l, c)) || t.sent_at.elapsed() >= KEEPALIVE;
             if due {
-                sender.color(t.addr, c);
+                sender.color(addr, c);
                 t.last = Some(c);
                 t.sent_at = tick;
             }
@@ -967,8 +1005,26 @@ mod tests {
         assert!(kept[0].streaming);
         assert!(stopped_streams(&t, &kept).is_empty());
         let off = build_targets(&razer_cfg(false), &mut t);
-        assert_eq!(stopped_streams(&t, &off), [t[0].addr]);
-        assert_eq!(stopped_streams(&t, &[]), [t[0].addr]);
+        let Dest::Lan(addr) = t[0].dest else {
+            panic!("a LAN light")
+        };
+        assert_eq!(stopped_streams(&t, &off), [addr]);
+        assert_eq!(stopped_streams(&t, &[]), [addr]);
+    }
+
+    #[test]
+    fn icue_lights_are_targets() {
+        let mut cfg = EngineConfig::default();
+        cfg.devices
+            .push(device("icue:{fans}", vec![Source::Path; 6]));
+        cfg.devices.push(device("icue:", vec![Source::Path]));
+        let t = build_targets(&cfg, &mut []);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].dest, Dest::Icue("{fans}".into()));
+        assert!(
+            stopped_streams(&t, &[]).is_empty(),
+            "iCUE lights don't stream"
+        );
     }
 
     #[test]

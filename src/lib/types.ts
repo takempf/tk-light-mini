@@ -61,6 +61,8 @@ export interface GoveeDevice {
   id: string;
   ip: string;
   sku: string;
+  /** Segments a new light starts with, when the scan knows (iCUE lights: one per fan or stick). */
+  segments?: number;
 }
 
 export interface AddedDevice extends GoveeDevice {
@@ -96,6 +98,13 @@ export type ResolvedCalibration = Record<Corner, Rgb> & { gamma: number };
 
 /** Segment counts measured on real lights. */
 const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10, H6056: 12 };
+
+/**
+ * A light inside this PC (fans, cooler, RAM), reached through Corsair iCUE,
+ * not the network. Its `ip` is "icue:" and iCUE's device id. It always takes a
+ * color per segment.
+ */
+export const isPcLight = (d: { ip: string }) => d.ip.startsWith("icue:");
 
 /** Segments to fill in razer mode. 15 is common on Govee strips. */
 export const defaultSegments = (sku: string) => KNOWN_SEGMENTS[sku] ?? 15;

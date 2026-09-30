@@ -4,6 +4,7 @@ mod capture;
 mod color;
 mod engine;
 mod govee;
+mod icue;
 mod paths;
 mod preview;
 #[cfg(test)]
@@ -16,15 +17,20 @@ use tauri::ipc::Response;
 use tauri::{AppHandle, Manager, RunEvent, State, Window, WindowEvent};
 
 use capture::MonitorInfo;
-use engine::{Engine, EngineConfig};
+use engine::{Dest, Engine, EngineConfig};
 use govee::Device;
 
+/// Govee lights on the network, then lights inside this PC (through iCUE).
 #[tauri::command]
 async fn discover_devices() -> Result<Vec<Device>, String> {
-    tauri::async_runtime::spawn_blocking(|| govee::discover(Duration::from_millis(2500)))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    let pcs = tauri::async_runtime::spawn_blocking(icue::discover);
+    let mut found =
+        tauri::async_runtime::spawn_blocking(|| govee::discover(Duration::from_millis(2500)))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+    found.extend(pcs.await.unwrap_or_default());
+    Ok(found)
 }
 
 #[tauri::command]
@@ -61,18 +67,46 @@ async fn next_preview(engine: State<'_, Engine>, after: u64) -> Result<Response,
 /// alone meanwhile, so sync doesn't fight the pulse.
 #[tauri::command]
 async fn identify_device(engine: State<'_, Engine>, ip: String) -> Result<(), String> {
-    let addr = govee::control_addr(&ip).ok_or("invalid ip")?;
-    engine.hold(addr, govee::IDENTIFY_DURATION + Duration::from_millis(100));
-    tauri::async_runtime::spawn_blocking(move || govee::identify(addr))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    let dest = Dest::parse(&ip).ok_or("invalid ip")?;
+    // Colors the engine already queued for an iCUE light land first.
+    let settle = match dest {
+        Dest::Lan(_) => Duration::ZERO,
+        Dest::Icue(_) => Duration::from_millis(150),
+    };
+    engine.hold(
+        dest.clone(),
+        settle + govee::IDENTIFY_DURATION + Duration::from_millis(100),
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(settle);
+        match dest {
+            Dest::Lan(addr) => govee::identify(addr).map_err(|e| e.to_string()),
+            Dest::Icue(device) => icue::identify(&device),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Switch one light on or off. Sent twice, since UDP can drop packets; the
 /// second send also lands after any color the engine still had in flight.
+/// An iCUE light has no power of its own: off paints it black, and on leaves
+/// it to the engine.
 #[tauri::command]
 async fn set_power(ip: String, on: bool) -> Result<(), String> {
+    if let Some(device) = icue::device_id(&ip) {
+        if on {
+            return Ok(());
+        }
+        let device = device.to_string();
+        return tauri::async_runtime::spawn_blocking(move || {
+            // After colors the engine queued before it stopped syncing the light.
+            std::thread::sleep(Duration::from_millis(150));
+            icue::off(&device)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     let addr = govee::control_addr(&ip).ok_or("invalid ip")?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut s = govee::Sender::new().map_err(|e| e.to_string())?;
@@ -91,6 +125,11 @@ async fn set_power(ip: String, on: bool) -> Result<(), String> {
 async fn lights_off(engine: State<'_, Engine>, ips: Vec<String>) -> Result<(), String> {
     engine.shutdown();
     tauri::async_runtime::spawn_blocking(move || {
+        for device in ips.iter().filter_map(|ip| icue::device_id(ip)) {
+            if let Err(e) = icue::off(device) {
+                eprintln!("icue {device}: {e}");
+            }
+        }
         let mut s = govee::Sender::new().map_err(|e| e.to_string())?;
         let addrs: Vec<_> = ips
             .iter()
@@ -219,6 +258,7 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 app.state::<Engine>().shutdown();
+                icue::close();
             }
         });
 }

@@ -85,6 +85,17 @@ How it works: each test color is a corner of the RGB color cube. The app sends t
 - The light and the PC have to be on the same subnet. Guest networks, IoT networks and some mesh setups block this.
 - Allow the app through Windows Firewall when it asks. Scan replies come in on UDP port 4002.
 
+### Lights inside the PC
+
+Corsair fans, coolers and RAM can join in through iCUE, which has to be installed:
+
+1. Put `iCUESDK.x64_2019.dll`, from [Corsair's cue-sdk releases](https://github.com/CorsairOfficial/cue-sdk/releases), next to the app's exe. The app doesn't ship it.
+2. **Scan**. They show up marked "Inside this PC".
+
+With the DLL there, the app starts iCUE hidden in the tray whenever it needs it (the first scan waits a few seconds for it), and closes it on quit if the app started it. Without the DLL, the app leaves iCUE alone.
+
+Each light starts with a segment per fan (in the order they're chained) or per RAM stick, and a cooler's ring as one. While the app runs, iCUE's own effects stay off the lights it drives. **Off** turns a light black, since it has no power switch of its own, and it stays black. After the app quits, the lights show their built-in effects.
+
 ## How it works
 
 About 30 times a second:
@@ -96,7 +107,7 @@ About 30 times a second:
    - lets bright, saturated pixels set the hue, so a dim background doesn't wash it out
    - keeps brightness true to the scene
 3. **Smooth.** Colors fade toward their target at the same speed whatever the frame rate.
-4. **Send.** Each light gets its color over UDP (Govee's LAN API). It only sends when the color changes, plus once a second in case a packet gets lost.
+4. **Send.** Each light gets its color over UDP (Govee's LAN API). It only sends when the color changes, plus once a second in case a packet gets lost. Lights inside the PC go through iCUE's SDK on their own thread, so a slow reply never holds up the rest.
 
 The capture thread and its GPU work both run at low priority, so the game always goes first. The preview in the window only updates while the window is visible.
 

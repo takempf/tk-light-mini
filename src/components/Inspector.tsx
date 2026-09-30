@@ -18,7 +18,14 @@ import {
   startAt,
   unresolvePath,
 } from "../lib/path";
-import type { AddedDevice, Fit, LightPath, Section, Source } from "../lib/types";
+import {
+  type AddedDevice,
+  type Fit,
+  isPcLight,
+  type LightPath,
+  type Section,
+  type Source,
+} from "../lib/types";
 import { useScreenAspect, useStore } from "../store";
 import { Badge, Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
 import { ColorPicker } from "./ColorPicker";
@@ -398,7 +405,7 @@ export function Inspector({ device, section }: { device: AddedDevice; section: n
             onChange={(e) => rename(device.id, e.target.value)}
           />
           <span className="meta">
-            {device.sku} · {device.ip}
+            {device.sku} · {isPcLight(device) ? "inside this PC" : device.ip}
           </span>
           <span className="meta">
             {sections.length} {sections.length === 1 ? "section" : "sections"} ·{" "}
@@ -413,12 +420,17 @@ export function Inspector({ device, section }: { device: AddedDevice; section: n
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
-          <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
-            Razer streaming{" "}
-            <Badge className="experimental-tag" tone="warning">
-              Experimental
-            </Badge>
-          </Switch>
+          {!isPcLight(device) && (
+            <Switch
+              checked={device.razer}
+              onCheckedChange={(on: boolean) => setRazer(device.id, on)}
+            >
+              Razer streaming{" "}
+              <Badge className="experimental-tag" tone="warning">
+                Experimental
+              </Badge>
+            </Switch>
+          )}
           {device.razer && (
             <Slider
               label="Segments"

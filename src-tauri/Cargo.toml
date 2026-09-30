@@ -23,6 +23,8 @@ if-addrs = "0.15"
 parking_lot = "0.12"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+# PC lights through iCUE: its SDK DLL is loaded at runtime.
+libloading = "0.9"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

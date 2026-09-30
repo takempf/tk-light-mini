@@ -30,6 +30,7 @@ import type {
   Source,
   Tuning,
 } from "./lib/types";
+import { isPcLight } from "./lib/types";
 
 export const DEFAULT_SETTINGS: Settings = {
   fps: 30,
@@ -297,7 +298,8 @@ export const useStore = create<AppState>()(
                       name: d.sku || d.id,
                       on: true,
                       brightness: 1,
-                      razer: false,
+                      // PC lights always stream one color per segment.
+                      razer: isPcLight(d),
                       sections: [{ count: 1, color: "path", path: linePath() }],
                     },
                   ],
