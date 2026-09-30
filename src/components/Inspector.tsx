@@ -30,7 +30,7 @@ import { useScreenAspect, useStore } from "../store";
 import { Badge, Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
 import { ColorPicker } from "./ColorPicker";
 import { SegmentBar } from "./SegmentBar";
-import { pct, Slider } from "./Slider";
+import { pct, Slider, vh } from "./Slider";
 
 const DEFAULT_WIDTH = 0.12;
 
@@ -145,7 +145,7 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
             min={0.02}
             max={1}
             step={0.01}
-            format={pct}
+            format={vh}
             onChange={(w) => place({ ...path, width: w })}
           />
           <div className="button-row">

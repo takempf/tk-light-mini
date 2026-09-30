@@ -38,3 +38,6 @@ export function Slider({ label, value, min, max, step, format, onChange }: Slide
 }
 
 export const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+/** A fraction of the screen's height, like CSS `vh`. */
+export const vh = (v: number) => `${Math.round(v * 100)}vh`;
