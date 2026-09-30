@@ -87,14 +87,14 @@ How it works: each test color is a corner of the RGB color cube. The app sends t
 
 ### Lights inside the PC
 
-Corsair fans, coolers and RAM can join in through iCUE, which has to be installed:
+Corsair fans, coolers, LED strips and RAM can join in through iCUE, which has to be installed. So can anything else iCUE lights: Corsair keyboards, mice and headset stands, and the boards and graphics cards iCUE supports.
 
 1. Put `iCUESDK.x64_2019.dll`, from [Corsair's cue-sdk releases](https://github.com/CorsairOfficial/cue-sdk/releases), next to the app's exe. The app doesn't ship it.
-2. **Scan**. They show up marked "Inside this PC".
+2. **Scan**. They show up marked "Through iCUE".
 
 With the DLL there, the app starts iCUE hidden in the tray whenever it needs it (the first scan waits a few seconds for it), and closes it on quit if the app started it. Without the DLL, the app leaves iCUE alone.
 
-Each light starts with a segment per fan (in the order they're chained) or per RAM stick, and a cooler's ring as one. While the app runs, iCUE's own effects stay off the lights it drives. **Off** turns a light black, since it has no power switch of its own, and it stays black. After the app quits, the lights show their built-in effects.
+Each light starts with a segment per fan, strip or pump (in the order they're chained) or per RAM stick, and anything else as one. With a segment each, a fan gets all its LEDs even when fans of different sizes share a hub. Other counts spread evenly over the LEDs, in the order iCUE draws them: around a pump's ring, and left to right across a keyboard. While the app runs, iCUE's own effects stay off the lights it drives. **Off** turns a light black, since it has no power switch of its own, and it stays black. After the app quits, the lights show their built-in effects.
 
 ## How it works
 

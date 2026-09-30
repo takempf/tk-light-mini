@@ -274,6 +274,28 @@ describe("App", () => {
     expect(screen.queryByText("Red · 50%")).toBeNull();
   });
 
+  it("adds a fan hub through iCUE with a segment per fan", async () => {
+    const id = "icue:{fdbcaa26-7194-45f1-a2ed-d2aeff182ac0}";
+    vi.mocked(api.discoverDevices).mockResolvedValue([
+      { id, ip: id, sku: "VENGEANCE PC", segments: 6 },
+    ]);
+    const user = userEvent.setup();
+    render(<App />);
+
+    const add = await screen.findByRole("button", { name: "Add VENGEANCE PC" });
+    const row = add.closest(".light") as HTMLElement;
+    expect(within(row).getByText("Through iCUE")).toBeInTheDocument();
+    expect(within(row).queryByText(id, { exact: false })).toBeNull();
+    await user.click(add);
+    expect(lastDevice()).toMatchObject({ ip: id, razer: true, segments: Array(6).fill("path") });
+
+    await user.click(screen.getByRole("button", { name: "Edit VENGEANCE PC" }));
+    expect(screen.getByText("VENGEANCE PC · through iCUE")).toBeInTheDocument();
+    // It always takes a color per segment: no switch, just the count.
+    expect(screen.queryByRole("switch", { name: /razer/i })).toBeNull();
+    expect(screen.getByRole("slider", { name: "Segments" })).toBeInTheDocument();
+  });
+
   it("splits a razer light into sections and colors single segments", async () => {
     useStore.setState({ devices: [light({ sku: "H6056", name: "Bars" })] });
     const user = userEvent.setup();

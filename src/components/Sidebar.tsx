@@ -151,7 +151,7 @@ function FoundRow({ device }: { device: GoveeDevice }) {
       <span className="light-title">
         <span className="light-name">{name}</span>
         <span className="meta">
-          {isPcLight(device) ? "Inside this PC" : `${device.ip} · ${device.id}`}
+          {isPcLight(device) ? "Through iCUE" : `${device.ip} · ${device.id}`}
         </span>
       </span>
       <Button size="sm" aria-label={`Add ${name}`} onClick={() => add(device)}>

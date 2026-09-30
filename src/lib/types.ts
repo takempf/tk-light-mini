@@ -100,7 +100,7 @@ export type ResolvedCalibration = Record<Corner, Rgb> & { gamma: number };
 const KNOWN_SEGMENTS: Readonly<Record<string, number>> = { H61F5: 10, H6056: 12 };
 
 /**
- * A light inside this PC (fans, cooler, RAM), reached through Corsair iCUE,
+ * A Corsair light (fans, cooler, RAM, keyboard...), reached through iCUE,
  * not the network. Its `ip` is "icue:" and iCUE's device id. It always takes a
  * color per segment.
  */

@@ -78,6 +78,32 @@ struct DeviceFilter {
     type_mask: i32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Int32Array {
+    items: *const i32,
+    count: u32,
+}
+
+#[repr(C)]
+union PropertyValue {
+    int32: i32,
+    int32_array: Int32Array,
+}
+
+#[repr(C)]
+struct Property {
+    kind: i32,
+    value: PropertyValue,
+}
+
+const PROPERTY_CHANNEL_LED_COUNT: i32 = 10;
+const PROPERTY_CHANNEL_DEVICE_COUNT: i32 = 11;
+const PROPERTY_CHANNEL_DEVICE_LED_COUNTS: i32 = 12;
+const PROPERTY_CHANNEL_DEVICE_TYPES: i32 = 13;
+const DATA_INT32: i32 = 1;
+const DATA_INT32_ARRAY: i32 = 17;
+
 type StateHandler = unsafe extern "C" fn(*mut c_void, *const StateChanged);
 
 struct Sdk {
@@ -89,6 +115,8 @@ struct Sdk {
     positions: unsafe extern "C" fn(*const c_char, i32, *mut LedPosition, *mut i32) -> i32,
     set_colors: unsafe extern "C" fn(*const c_char, i32, *const LedColor) -> i32,
     request_control: unsafe extern "C" fn(*const c_char, i32) -> i32,
+    read_property: unsafe extern "C" fn(*const c_char, i32, u32, *mut Property) -> i32,
+    free_property: unsafe extern "C" fn(*mut Property) -> i32,
 }
 
 static STATE: AtomicI32 = AtomicI32::new(0);
@@ -168,6 +196,8 @@ impl Sdk {
                 positions: sym!("CorsairGetLedPositions"),
                 set_colors: sym!("CorsairSetLedColors"),
                 request_control: sym!("CorsairRequestControl"),
+                read_property: sym!("CorsairReadDeviceProperty"),
+                free_property: sym!("CorsairFreeProperty"),
                 _lib: lib,
             })
         }
@@ -241,6 +271,34 @@ impl Sdk {
         out.truncate(n.max(0) as usize);
         Ok(out)
     }
+
+    /// An Int32 or Int32 array property, as a list. `index` picks the channel.
+    fn ints(&self, id: &[c_char], property: i32, index: u32) -> Option<Vec<i32>> {
+        let mut p = Property {
+            kind: 0,
+            value: PropertyValue { int32: 0 },
+        };
+        if unsafe { (self.read_property)(id.as_ptr(), property, index, &mut p) } != 0 {
+            return None;
+        }
+        // SAFETY: the type says which member the SDK filled.
+        let v = unsafe {
+            match p.kind {
+                DATA_INT32 => Some(vec![p.value.int32]),
+                DATA_INT32_ARRAY => {
+                    let a = p.value.int32_array;
+                    Some(if a.items.is_null() {
+                        Vec::new()
+                    } else {
+                        std::slice::from_raw_parts(a.items, a.count as usize).to_vec()
+                    })
+                }
+                _ => None,
+            }
+        };
+        unsafe { (self.free_property)(&mut p) };
+        v
+    }
 }
 
 impl Drop for Sdk {
@@ -309,10 +367,27 @@ pub fn list(dll: Option<&str>) -> Result<(), String> {
             d.channel_count,
             text(&d.id)
         );
+        for c in 0..d.channel_count.max(0) as u32 {
+            let ints = |p| {
+                sdk.ints(&d.id, p, c)
+                    .map_or("?".into(), |v| format!("{v:?}"))
+            };
+            println!(
+                "  {:<20} channel {c}: {} LEDs, {} devices, LEDs each {}, types {}",
+                "",
+                ints(PROPERTY_CHANNEL_LED_COUNT),
+                ints(PROPERTY_CHANNEL_DEVICE_COUNT),
+                ints(PROPERTY_CHANNEL_DEVICE_LED_COUNTS),
+                ints(PROPERTY_CHANNEL_DEVICE_TYPES),
+            );
+        }
         if let Ok(p) = sdk.positions(&d.id) {
-            let ids: Vec<String> = p.iter().take(12).map(|p| format!("{}", p.id)).collect();
-            let more = if p.len() > 12 { " ..." } else { "" };
-            println!("  {:<20} LED ids: {}{more}", "", ids.join(" "));
+            // Group (high 16 bits) and index, then where it sits.
+            let leds: Vec<String> = p
+                .iter()
+                .map(|p| format!("{}.{}@{:.0},{:.0}", p.id >> 16, p.id & 0xFFFF, p.cx, p.cy))
+                .collect();
+            println!("  {:<20} LEDs (group.index@x,y): {}", "", leds.join(" "));
         }
     }
     Ok(())

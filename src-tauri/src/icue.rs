@@ -34,10 +34,11 @@ const DEVICE_COUNT_MAX: usize = 64;
 const LED_COUNT_MAX: usize = 512;
 const STATE_CONNECTED: i32 = 6;
 const TYPE_ALL: i32 = -1;
-const TYPE_FAN_CONTROLLER: i32 = 0x0020;
-const TYPE_LED_CONTROLLER: i32 = 0x0040;
-const TYPE_MEMORY: i32 = 0x0080;
-const PROPERTY_CHANNEL_DEVICE_COUNT: i32 = 11;
+/// Per channel: the LED count of each fan, strip, pump or RAM stick on it.
+const PROPERTY_CHANNEL_DEVICE_LED_COUNTS: i32 = 12;
+const DATA_INT32_ARRAY: i32 = 17;
+/// LED id groups (the id's high 16 bits) of a controller's channels 1 to 3.
+const CHANNEL_GROUPS: std::ops::RangeInclusive<u32> = 11..=13;
 const ACCESS_EXCLUSIVE_LIGHTING: i32 = 1;
 /// How long to wait for iCUE to answer a new session.
 const CONNECT_WAIT: Duration = Duration::from_secs(2);
@@ -85,10 +86,17 @@ struct DeviceFilter {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct Int32Array {
+    items: *const i32,
+    count: u32,
+}
+
+#[repr(C)]
 union PropertyValue {
     int32: i32,
-    /// The largest member: an array's pointer and count.
-    _array: [u64; 2],
+    /// The largest member, like the SDK's other arrays.
+    int32_array: Int32Array,
 }
 
 #[repr(C)]
@@ -104,6 +112,7 @@ struct Sdk {
     _lib: Library,
     connect: unsafe extern "C" fn(StateHandler, *mut c_void) -> i32,
     devices: unsafe extern "C" fn(*const DeviceFilter, i32, *mut DeviceInfo, *mut i32) -> i32,
+    info: unsafe extern "C" fn(*const c_char, *mut DeviceInfo) -> i32,
     positions: unsafe extern "C" fn(*const c_char, i32, *mut LedPosition, *mut i32) -> i32,
     read_property: unsafe extern "C" fn(*const c_char, i32, u32, *mut Property) -> i32,
     free_property: unsafe extern "C" fn(*mut Property) -> i32,
@@ -148,6 +157,7 @@ impl Sdk {
             Ok(Self {
                 connect: sym!("CorsairConnect"),
                 devices: sym!("CorsairGetDevices"),
+                info: sym!("CorsairGetDeviceInfo"),
                 positions: sym!("CorsairGetLedPositions"),
                 read_property: sym!("CorsairReadDeviceProperty"),
                 free_property: sym!("CorsairFreeProperty"),
@@ -172,7 +182,14 @@ impl Sdk {
         Ok(out)
     }
 
-    /// LED ids in the SDK's order: for a fan hub, port by port.
+    fn info(&self, id: &CStr) -> Result<DeviceInfo, String> {
+        // SAFETY: plain integers and arrays; all zeros is a valid value.
+        let mut d: DeviceInfo = unsafe { std::mem::zeroed() };
+        check(unsafe { (self.info)(id.as_ptr(), &mut d) })?;
+        Ok(d)
+    }
+
+    /// LED ids in the order they sit, see `led_order`.
     fn leds(&self, id: &CStr) -> Result<Vec<u32>, String> {
         let mut out = vec![LedPosition::default(); LED_COUNT_MAX];
         let mut n = 0;
@@ -180,10 +197,10 @@ impl Sdk {
             (self.positions)(id.as_ptr(), LED_COUNT_MAX as i32, out.as_mut_ptr(), &mut n)
         })?;
         out.truncate(n.max(0) as usize);
-        Ok(out.iter().map(|p| p.id).collect())
+        Ok(led_order(out))
     }
 
-    fn int_property(&self, id: &[c_char], property: i32, index: u32) -> Option<i32> {
+    fn int_array(&self, id: &[c_char], property: i32, index: u32) -> Option<Vec<i32>> {
         let mut p = Property {
             kind: 0,
             value: PropertyValue { int32: 0 },
@@ -191,25 +208,31 @@ impl Sdk {
         if unsafe { (self.read_property)(id.as_ptr(), property, index, &mut p) } != 0 {
             return None;
         }
-        // SAFETY: an Int32 property (type 1) fills `int32`; it starts zeroed.
-        let v = (p.kind == 1).then_some(unsafe { p.value.int32 });
+        // SAFETY: an Int32 array property fills `int32_array`, which the SDK
+        // owns until it's freed.
+        let v = (p.kind == DATA_INT32_ARRAY).then(|| unsafe {
+            let a = p.value.int32_array;
+            if a.items.is_null() {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(a.items, a.count as usize).to_vec()
+            }
+        });
         unsafe { (self.free_property)(&mut p) };
         v
     }
 
-    /// Segments a new light starts with: one per fan, one per RAM stick, or
-    /// one for the whole device.
-    fn default_segments(&self, d: &DeviceInfo) -> usize {
-        match d.kind {
-            TYPE_MEMORY => d.channel_count.max(1) as usize,
-            TYPE_FAN_CONTROLLER | TYPE_LED_CONTROLLER => {
-                let fans: i32 = (0..d.channel_count.max(0) as u32)
-                    .filter_map(|c| self.int_property(&d.id, PROPERTY_CHANNEL_DEVICE_COUNT, c))
-                    .sum();
-                fans.max(1) as usize
-            }
-            _ => 1,
-        }
+    /// Each fan, strip, pump or RAM stick's LED count, channel by channel.
+    /// Empty for a device without channels, like a keyboard.
+    fn zones(&self, d: &DeviceInfo) -> Vec<usize> {
+        (0..d.channel_count.max(0) as u32)
+            .flat_map(|c| {
+                self.int_array(&d.id, PROPERTY_CHANNEL_DEVICE_LED_COUNTS, c)
+                    .unwrap_or_default()
+            })
+            .filter(|&n| n > 0)
+            .map(|n| n as usize)
+            .collect()
     }
 
     fn paint(&self, id: &CStr, leds: &[u32], colors: &[Rgb]) -> Result<(), String> {
@@ -384,7 +407,8 @@ pub fn discover() -> Vec<Device> {
                         ip: id.clone(),
                         id,
                         sku: text(&d.model),
-                        segments: Some(sdk.default_segments(d)),
+                        // One per fan, pump or RAM stick, or one for the lot.
+                        segments: Some(sdk.zones(d).len().max(1)),
                     }
                 })
                 .collect::<Vec<_>>())
@@ -418,28 +442,52 @@ pub fn device_id(app_id: &str) -> Option<&str> {
     app_id.strip_prefix(PREFIX).filter(|s| !s.is_empty())
 }
 
-/// Segment colors spread over `leds` LEDs: each segment gets an even share,
-/// first to last.
-fn stretch(segments: &[Rgb], leds: usize, out: &mut Vec<Rgb>) {
+/// LED ids in the order they sit. A controller's LEDs go channel by channel,
+/// each as iCUE lays it out: on the a7200 that's fan by fan, but around a pump
+/// ring it isn't id order. Anything else goes left to right, then top down.
+fn led_order(mut leds: Vec<LedPosition>) -> Vec<u32> {
+    let channel = |id: u32| Some(id >> 16).filter(|g| CHANNEL_GROUPS.contains(g));
+    leds.sort_by(|a, b| {
+        channel(a.id)
+            .cmp(&channel(b.id))
+            .then(a.cx.total_cmp(&b.cx))
+            .then(a.cy.total_cmp(&b.cy))
+            .then(a.id.cmp(&b.id))
+    });
+    leds.iter().map(|p| p.id).collect()
+}
+
+/// Segment colors spread over `leds` LEDs, first to last. With a segment per
+/// zone, each fills its zone however many LEDs it has; otherwise each gets
+/// an even share.
+fn spread(segments: &[Rgb], zones: &[usize], leds: usize, out: &mut Vec<Rgb>) {
     out.clear();
     if segments.is_empty() {
         return;
     }
-    out.extend((0..leds).map(|i| segments[i * segments.len() / leds]));
+    if segments.len() == zones.len() && zones.iter().sum::<usize>() == leds {
+        for (&c, &n) in segments.iter().zip(zones) {
+            out.extend(std::iter::repeat_n(c, n));
+        }
+    } else {
+        out.extend((0..leds).map(|i| segments[i * segments.len() / leds]));
+    }
 }
 
-/// A device we paint: its id for the SDK and its LEDs, in order.
+/// A device we paint: its id for the SDK, its LEDs in order, and its zones.
 struct Target {
     id: CString,
     leds: Vec<u32>,
+    zones: Vec<usize>,
 }
 
 /// Takes the device from iCUE's own effects and learns its LEDs.
 fn take(sdk: &Sdk, device: &str) -> Result<Target, String> {
     let id = CString::new(device).map_err(|_| "bad device id".to_string())?;
     check(unsafe { (sdk.request_control)(id.as_ptr(), ACCESS_EXCLUSIVE_LIGHTING) })?;
+    let zones = sdk.zones(&sdk.info(&id)?);
     let leds = sdk.leds(&id)?;
-    Ok(Target { id, leds })
+    Ok(Target { id, leds, zones })
 }
 
 /// Paints outside the engine's thread, so that thread resends its colors
@@ -518,7 +566,7 @@ fn work(slot: &Slot) {
                     targets.insert(device.clone(), take(sdk, &device)?);
                 }
                 let t = &targets[&device];
-                stretch(&segments, t.leds.len(), &mut leds);
+                spread(&segments, &t.zones, t.leds.len(), &mut leds);
                 sdk.paint(&t.id, &t.leds, &leds)
             });
             if let Err(e) = r {
@@ -576,18 +624,121 @@ impl Drop for Outputs {
 mod tests {
     use super::*;
 
+    fn segs(n: u8) -> Vec<Rgb> {
+        (0..n).map(|i| [i, 0, 0]).collect()
+    }
+
     #[test]
-    fn segments_stretch_evenly_over_leds() {
+    fn a_segment_per_fan() {
+        // The a7200's fan hub: 6 fans of 8 LEDs.
         let mut out = Vec::new();
-        let six: Vec<Rgb> = (0..6).map(|i| [i, 0, 0]).collect();
-        stretch(&six, 48, &mut out);
+        spread(&segs(6), &[8; 6], 48, &mut out);
         assert_eq!(out.len(), 48);
         assert_eq!(out[0..8], [[0, 0, 0]; 8], "fan 1 is segment 1");
         assert_eq!(out[40..48], [[5, 0, 0]; 8], "fan 6 is segment 6");
-        stretch(&[[9, 9, 9]], 16, &mut out);
+    }
+
+    #[test]
+    fn a_segment_per_zone_whatever_its_size() {
+        // A pump with 29 LEDs, then two 34-LED fans.
+        let mut out = Vec::new();
+        spread(&segs(3), &[29, 34, 34], 97, &mut out);
+        assert_eq!(out[0..29], [[0, 0, 0]; 29]);
+        assert_eq!(out[29..63], [[1, 0, 0]; 34]);
+        assert_eq!(out[63..97], [[2, 0, 0]; 34]);
+    }
+
+    #[test]
+    fn other_counts_share_evenly() {
+        let mut out = Vec::new();
+        spread(&[[9, 9, 9]], &[16], 16, &mut out);
         assert_eq!(out, [[9, 9, 9]; 16], "one segment fills the ring");
-        stretch(&[], 16, &mut out);
+        spread(&segs(2), &[8; 6], 48, &mut out);
+        assert_eq!(out[0..24], [[0, 0, 0]; 24], "2 segments over 6 fans");
+        assert_eq!(out[24..48], [[1, 0, 0]; 24]);
+        spread(&segs(4), &[], 104, &mut out);
+        assert_eq!(out.len(), 104, "a keyboard has no zones");
+        assert_eq!(out[103], [3, 0, 0]);
+        spread(&segs(2), &[8, 8], 20, &mut out);
+        assert_eq!(out.len(), 20, "zones that don't add up are ignored");
+        spread(&[], &[16], 16, &mut out);
         assert!(out.is_empty());
+    }
+
+    fn at(group: u32, index: u32, cx: f64, cy: f64) -> LedPosition {
+        LedPosition {
+            id: group << 16 | index,
+            cx,
+            cy,
+        }
+    }
+
+    fn indexes(ids: Vec<u32>) -> Vec<u32> {
+        ids.iter().map(|id| id & 0xFFFF).collect()
+    }
+
+    #[test]
+    fn pump_ring_goes_by_layout_not_id() {
+        // What iCUE 5.51 reports for the H100i RGB PRO XT, in its order.
+        let xs = [
+            320., 340., 280., 300., 140., 160., 180., 200., 220., 240., 260., 40., 60., 80., 100.,
+            120.,
+        ];
+        let ring = (1..=16).zip(xs).map(|(i, x)| at(11, i, x, 5.)).collect();
+        assert_eq!(
+            indexes(led_order(ring)),
+            [12, 13, 14, 15, 16, 5, 6, 7, 8, 9, 10, 11, 3, 4, 1, 2]
+        );
+    }
+
+    #[test]
+    fn fans_stay_fan_by_fan() {
+        // The a7200's fan hub: 8 LEDs a fan, a gap between fans.
+        let fans = (1..=48)
+            .rev()
+            .map(|i| {
+                let x = 40. + 20. * (i - 1) as f64 + 60. * ((i - 1) / 8) as f64;
+                at(11, i, x, 5.)
+            })
+            .collect();
+        assert_eq!(indexes(led_order(fans)), (1..=48).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn channels_go_in_turn() {
+        // Two channels laid out over the same stretch.
+        let leds = vec![at(12, 1, 40., 5.), at(11, 2, 60., 5.), at(11, 1, 40., 5.)];
+        assert_eq!(led_order(leds), [11 << 16 | 1, 11 << 16 | 2, 12 << 16 | 1]);
+    }
+
+    #[test]
+    fn ram_goes_stick_by_stick() {
+        // What iCUE reports: sticks side by side, LED 1 of each at the bottom.
+        let ram = (0..4)
+            .flat_map(|s| {
+                (0..10).map(move |l| {
+                    at(
+                        8,
+                        s * 10 + l + 1,
+                        108. + 16. * s as f64,
+                        133. - 14.5 * l as f64,
+                    )
+                })
+            })
+            .collect();
+        let order = indexes(led_order(ram));
+        assert_eq!(
+            order[0..10],
+            [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+            "stick 1, top down"
+        );
+        assert_eq!(order[30..40], [40, 39, 38, 37, 36, 35, 34, 33, 32, 31]);
+    }
+
+    #[test]
+    fn keyboards_go_left_to_right() {
+        let keys = vec![at(0, 3, 30., 0.), at(2, 1, 10., 50.), at(0, 2, 10., 0.)];
+        assert_eq!(led_order(keys), [2, 2 << 16 | 1, 3]);
     }
 
     #[test]
@@ -613,6 +764,11 @@ mod tests {
         let found = discover();
         println!("{found:#?}");
         assert!(!found.is_empty());
+        for d in &found {
+            let t = with_sdk(LAUNCH_WAIT, |sdk| take(sdk, device_id(&d.id).unwrap())).unwrap();
+            println!("{}: {} LEDs, zones {:?}", d.sku, t.leds.len(), t.zones);
+            assert_eq!(d.segments, Some(t.zones.len().max(1)));
+        }
         close();
     }
 }

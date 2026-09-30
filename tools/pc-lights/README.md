@@ -42,6 +42,11 @@ Stock lights (4000D AIRFLOW case):
 
 `cycle` steps each target through red, green, blue and white.
 
+`icue list` prints each channel's devices (LED counts and types) and every LED
+as `group.index@x,y`. On iCUE 5.51 the fans read 6 x 8 LEDs in port order and
+the RAM 4 channels of 10. The pump ring's ids are out of order along iCUE's
+layout (12-16, 5-11, 3-4, 1-2 left to right), so the app orders LEDs by layout.
+
 Protocols come from OpenRGB (Mystic Light 185, Lighting Node) and liquidctl
 (Hydro Platinum). `mystic set` saves the original report to
 `%TEMP%\pc-lights-mystic-backup.bin` for `mystic restore`.

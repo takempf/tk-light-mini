@@ -405,7 +405,7 @@ export function Inspector({ device, section }: { device: AddedDevice; section: n
             onChange={(e) => rename(device.id, e.target.value)}
           />
           <span className="meta">
-            {device.sku} · {isPcLight(device) ? "inside this PC" : device.ip}
+            {device.sku} · {isPcLight(device) ? "through iCUE" : device.ip}
           </span>
           <span className="meta">
             {sections.length} {sections.length === 1 ? "section" : "sections"} ·{" "}
