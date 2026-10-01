@@ -2,9 +2,9 @@
 //! whatever iCUE sees.
 //!
 //! The SDK's client DLL, `iCUESDK.x64_2019.dll` from
-//! github.com/CorsairOfficial/cue-sdk/releases, goes next to the app's exe
-//! (Corsair doesn't state a license for it, so the app doesn't ship it). With
-//! it there, the app starts iCUE hidden in the tray when it needs it, and
+//! github.com/CorsairOfficial/cue-sdk/releases, goes next to the app's exe:
+//! build.rs fetches it and the Windows bundle config ships it. With it
+//! there, the app starts iCUE hidden in the tray when it needs it, and
 //! closes it on exit if it started it. Without it, iCUE is left alone. One
 //! session lasts until the app exits.
 //!
