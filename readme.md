@@ -4,6 +4,14 @@ Makes your Govee lights match what's on your screen, so the wall behind the TV g
 
 It's built to stay out of the way. If you're gaming, it shouldn't cost you frames.
 
+## Install
+
+Download `tk-light-mini_x.y.z_x64-setup.exe` from the [latest release](https://github.com/takempf/tk-light-mini/releases/latest) and run it. It installs for your user only, with no admin prompt. The installer isn't code-signed, so Windows SmartScreen may warn about an unknown publisher: click **More info**, then **Run anyway**.
+
+### Updates
+
+The app checks for a new version shortly after it starts, then every 6 hours. A new version downloads in the background, and then **Update** shows in the title bar. Click it to restart into the new version. In **Settings** you can see your version, check now, and switch automatic checks off. The app only installs updates signed with its own key.
+
 ## Using it
 
 1. In the Govee Home app, turn on **LAN Control** for each light, then unplug the light for about 10 seconds to restart it.
@@ -129,7 +137,9 @@ src-tauri/src/
   visuals.rs         painted scenes and the phthalo filter
   govee.rs           LAN discovery and control
   engine.rs          the capture -> color -> send loop
+  updates.rs         updates from GitHub releases
   lib.rs             Tauri commands
+scripts/release.mjs  version, build, sign and publish
 ```
 
 ## Development
@@ -141,7 +151,10 @@ pnpm install
 pnpm tauri dev      # run the app
 pnpm tauri build    # make an installer
 pnpm check          # lint, typecheck, frontend tests and Rust tests
+pnpm coverage       # frontend tests with a coverage report
 ```
+
+`pnpm install` also turns on a pre-push hook (`.githooks/pre-push`) that runs `pnpm check`, standing in for CI. Besides each module's own tests, `src/lib/api.test.ts` checks that every call the page makes matches a registered Rust command and its argument names.
 
 Tests that need real hardware are skipped by default:
 
@@ -151,6 +164,29 @@ cargo test -- --ignored live_capture --nocapture    # grab a real frame
 cargo test -- --ignored live_scan_raw --nocapture   # print every Govee scan reply
 cargo test -- --ignored render_canvases --nocapture # save each scene as an image
 ```
+
+## Releasing
+
+There's no CI: releases are built and published from your PC. Write what changed under **Unreleased** in `CHANGELOG.md` as you go. Then:
+
+```sh
+pnpm release patch             # or minor, major, or an exact x.y.z
+pnpm release patch --dry-run   # build and check, but publish nothing
+```
+
+The release script:
+
+1. checks you're on a clean `main` that's up to date with GitHub
+2. runs `pnpm check`
+3. sets the version in `package.json` (which the app reads) and `Cargo.toml`, and moves the changelog's **Unreleased** notes under it
+4. builds the installer, signs it with the updater key, and checks the signature the way the app will
+5. commits, tags `vX.Y.Z` and pushes
+6. publishes a GitHub release with the installer, its signature and `latest.json`, the feed the app checks
+7. downloads the feed and installer back, to confirm the app will find a good update
+
+A dry run stops after step 4 and puts the version back.
+
+The updater key is at `~/.tauri/tk-light-mini.key` (or set `TAURI_SIGNING_PRIVATE_KEY` to the key or its path). **Back it up.** Its public half is built into the app, and installed copies accept only updates signed with it. To try an update against a local `latest.json`, set `TK_LIGHT_MINI_UPDATE_URL` to its URL before starting the app.
 
 ## Experimental: razer streaming
 

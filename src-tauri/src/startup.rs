@@ -148,6 +148,14 @@ mod imp {
 mod tests {
     use super::*;
 
+    /// The quotes keep a path with spaces whole, and the flag keeps sign-in
+    /// launches in the tray (the updater passes it on when it restarts the app).
+    #[test]
+    fn starts_this_exe_hidden() {
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(command().unwrap(), format!("\"{}\" --hidden", exe.display()));
+    }
+
     /// Writes the real `Run` key, then puts it back.
     /// `cargo test -- --ignored live_round_trip`
     #[test]

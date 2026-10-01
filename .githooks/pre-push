@@ -1,0 +1,9 @@
+#!/bin/sh
+# Stands in for CI: nothing reaches GitHub unless lint, types and every test
+# pass. `pnpm install` turns this on (see "prepare" in package.json).
+
+# Prefer rustup's cargo over any other on PATH.
+[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
+
+echo "pre-push: pnpm check"
+exec pnpm check
