@@ -12,10 +12,24 @@ const ICUE_ENTRY: &str = "iCUESDK/redist/x64/iCUESDK.x64_2019.dll";
 const ICUE_SHA256: &str = "d72fd819b91fd1d3b0c3db2ea17a47dcfe3b38e26269aa967ecfee10d2e93884";
 
 fn main() {
+    let mut attributes = tauri_build::Attributes::new();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         icue_dll();
+        attributes = attributes
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        manifest();
     }
-    tauri_build::build()
+    tauri_build::try_build(attributes).expect("tauri build")
+}
+
+/// Tauri's app manifest (Common Controls v6, which the dialogs need), linked
+/// into every binary rather than only the app's exe as tauri-build does:
+/// test binaries without it fail to start.
+fn manifest() {
+    let path = std::env::current_dir().unwrap().join("windows-app-manifest.xml");
+    println!("cargo:rerun-if-changed={}", path.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", path.display());
 }
 
 fn icue_dll() {

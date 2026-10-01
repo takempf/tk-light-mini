@@ -87,3 +87,99 @@ fn let_go(app: &AppHandle) {
     app.state::<crate::engine::Engine>().shutdown();
     crate::icue::close();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    /// What `scripts/release.mjs` publishes, made with a throwaway key.
+    const FEED: &str = include_str!("../../scripts/fixtures/latest.json");
+    const INSTALLER: &[u8] = include_bytes!("../../scripts/fixtures/installer.txt");
+    const PUBKEY: &str = include_str!("../../scripts/fixtures/fixture.key.pub");
+
+    /// Serves `latest.json` and the installer, with the installer's bytes run
+    /// through `tamper`. Returns the feed's URL.
+    fn serve(tamper: fn(&mut Vec<u8>)) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let feed = FEED.replace("PORT", &port.to_string());
+        let mut installer = INSTALLER.to_vec();
+        tamper(&mut installer);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut line = String::new();
+                let mut reader = BufReader::new(&stream);
+                reader.read_line(&mut line).unwrap();
+                // Skip the headers.
+                let mut header = String::new();
+                while reader.read_line(&mut header).is_ok_and(|n| n > 2) {
+                    header.clear();
+                }
+                let body: &[u8] = match line.split(' ').nth(1) {
+                    Some("/latest.json") => feed.as_bytes(),
+                    Some("/installer.txt") => &installer,
+                    _ => b"",
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://127.0.0.1:{port}/latest.json")
+    }
+
+    /// The real updater in a mock app at version `current`, reading `feed`.
+    fn check(current: &str, feed: &str) -> Option<Update> {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.package_info_mut().version = current.parse().unwrap();
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": PUBKEY.trim(), "endpoints": [] }),
+        );
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .unwrap();
+        let updater = app
+            .updater_builder()
+            .endpoints(vec![feed.parse().unwrap()])
+            .unwrap()
+            .build()
+            .unwrap();
+        tauri::async_runtime::block_on(updater.check()).unwrap()
+    }
+
+    #[test]
+    fn finds_a_newer_release_and_checks_its_signature() {
+        let update = check("0.1.0", &serve(|_| {})).expect("an update");
+        assert_eq!(
+            UpdateInfo::from(&update),
+            UpdateInfo {
+                version: "9.9.9".into(),
+                notes: Some("- Faster scans".into()),
+            }
+        );
+        let bytes = tauri::async_runtime::block_on(update.download(|_, _| {}, || {})).unwrap();
+        assert_eq!(bytes, INSTALLER);
+    }
+
+    #[test]
+    fn refuses_an_installer_that_doesnt_match_its_signature() {
+        let update = check("0.1.0", &serve(|b| b[0] ^= 1)).expect("an update");
+        let got = tauri::async_runtime::block_on(update.download(|_, _| {}, || {}));
+        let e = got.expect_err("a changed installer downloaded").to_string();
+        assert!(e.to_lowercase().contains("signature"), "{e}");
+    }
+
+    #[test]
+    fn stays_put_on_the_latest_version() {
+        assert!(check("9.9.9", &serve(|_| {})).is_none());
+        assert!(check("10.0.0", &serve(|_| {})).is_none());
+    }
+}

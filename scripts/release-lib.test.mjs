@@ -144,6 +144,23 @@ describe("latest.json", () => {
   });
 });
 
+describe("feed fixture", () => {
+  // src-tauri/src/updates.rs serves this to the real updater, so it has to be
+  // what latestJson writes.
+  it("matches what a release writes", () => {
+    const sig = read("scripts", "fixtures", "installer.txt.sig");
+    expect(
+      latestJson({
+        version: "9.9.9",
+        notes: "- Faster scans",
+        pubDate: new Date("2026-10-01T12:00:00Z"),
+        signature: sig,
+        url: "http://127.0.0.1:PORT/installer.txt",
+      }),
+    ).toEqual(JSON.parse(read("scripts", "fixtures", "latest.json")));
+  });
+});
+
 describe("signatures", () => {
   const file = readFileSync(fixture("installer.txt"));
   const sig = read("scripts", "fixtures", "installer.txt.sig");

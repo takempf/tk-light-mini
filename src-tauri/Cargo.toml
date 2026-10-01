@@ -27,6 +27,10 @@ tauri-plugin-dialog = "2"
 # PC lights through iCUE: its SDK DLL is loaded at runtime.
 libloading = "0.9"
 
+[dev-dependencies]
+# Mock runtime, to run the real updater in tests.
+tauri = { version = "2", features = ["tray-icon", "test"] }
+
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"

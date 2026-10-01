@@ -1,0 +1,11 @@
+{
+  "version": "9.9.9",
+  "notes": "- Faster scans",
+  "pub_date": "2026-10-01T12:00:00.000Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSXMwYXlSUmNJN3B6KzA0WWhERTFpUnlYY3JuaUN4TWFURUhvODJPRWdyM2MwcStSUlhSY202L1BQaXdGc25XNC8yU1JSZGhpbDlIdzJhcDhJMkhHWS9uRW4yNGFucUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODYwNzIzCWZpbGU6aW5zdGFsbGVyLnR4dAozTTdVYmEzUGlWNjVLLzNQQ2Q3TTEyaE14ajJKSnFKMnJpU1hsU1ZSeStqdlpMY2tnbTI2eHllcGdWL2pOeEJocEdacklGeVk1NTB6KzJIQ2xFeG1BQT09Cg==",
+      "url": "http://127.0.0.1:PORT/installer.txt"
+    }
+  }
+}
