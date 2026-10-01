@@ -4,6 +4,8 @@ What changed in each release. `pnpm release` moves the notes under **Unreleased*
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-01
+
 First release.
 
 - Makes Govee lights on your network match what's on your screen, about 30 times a second, without costing frames.
