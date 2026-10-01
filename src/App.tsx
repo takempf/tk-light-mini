@@ -3,6 +3,7 @@ import { Calibrator } from "./components/Calibrator";
 import { Canvas } from "./components/Canvas";
 import { Sidebar } from "./components/Sidebar";
 import { TitleBar } from "./components/TitleBar";
+import { startUpdateChecks } from "./lib/updates";
 import { useStore } from "./store";
 import { startSync } from "./sync";
 import "./App.css";
@@ -12,11 +13,15 @@ export default function App() {
   const error = useStore((s) => s.status.error);
 
   useEffect(() => {
-    const stop = startSync();
+    const stopSync = startSync();
+    const stopUpdates = startUpdateChecks();
     const { scan, loadMonitors } = useStore.getState();
     void scan();
     void loadMonitors();
-    return stop;
+    return () => {
+      stopSync();
+      stopUpdates();
+    };
   }, []);
 
   return (

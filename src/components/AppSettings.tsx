@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { type UpdateStatus, useUpdates } from "../lib/updates";
 import { Button, Dialog, Icon, Switch } from "../ui";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -45,6 +46,78 @@ function StartupSetting() {
   );
 }
 
+function updateText(status: UpdateStatus): string | null {
+  switch (status.kind) {
+    case "idle":
+      return null;
+    case "checking":
+      return "Checking for updates…";
+    case "latest":
+      return "You have the latest version.";
+    case "ready":
+      return status.error
+        ? `Couldn't install version ${status.update.version}: ${status.error}`
+        : `Version ${status.update.version} is ready to install.`;
+    case "installing":
+      return `Installing version ${status.update.version}…`;
+    case "error":
+      return `Couldn't check for updates: ${status.message}`;
+  }
+}
+
+/** This version, updates and whether to look for them on their own. */
+function UpdateSetting() {
+  const [version, setVersion] = useState<string | null>(null);
+  const { status, auto, setAuto, check, install } = useUpdates();
+
+  useEffect(() => {
+    let live = true;
+    api
+      .version()
+      .then((v) => live && setVersion(v))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const text = updateText(status);
+  const failed = status.kind === "error" || (status.kind === "ready" && status.error);
+  const notes = status.kind === "ready" ? status.update.notes : null;
+  return (
+    <div className="update-setting">
+      <div className="update-row">
+        <div>
+          <div>Version {version ?? "…"}</div>
+          {text && (
+            <p className={failed ? "setting-hint error" : "setting-hint"} role="status">
+              {text}
+            </p>
+          )}
+        </div>
+        {status.kind === "ready" || status.kind === "installing" ? (
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={status.kind === "installing"}
+            onClick={() => void install()}
+          >
+            Restart to update
+          </Button>
+        ) : (
+          <Button size="sm" disabled={status.kind === "checking"} onClick={() => void check()}>
+            Check for updates
+          </Button>
+        )}
+      </div>
+      {notes && <p className="update-notes">{notes}</p>}
+      <Switch checked={auto} onCheckedChange={setAuto}>
+        Check for updates automatically
+      </Switch>
+    </div>
+  );
+}
+
 /** The settings button in the title bar, and its dialog. */
 export function AppSettings() {
   return (
@@ -55,6 +128,7 @@ export function AppSettings() {
       <Dialog.Popup size="sm" className="app-settings">
         <Dialog.Title>Settings</Dialog.Title>
         <StartupSetting />
+        <UpdateSetting />
         <div className="app-settings-actions">
           <Dialog.Close render={<Button size="sm" />}>Done</Dialog.Close>
         </div>

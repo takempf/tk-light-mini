@@ -1,8 +1,9 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import { decodePreview, type Preview } from "./preview";
-import type { EngineConfig, GoveeDevice, MonitorInfo } from "./types";
+import type { EngineConfig, GoveeDevice, MonitorInfo, UpdateInfo } from "./types";
 
 /** Thin wrapper over Tauri IPC, so tests can mock one module. */
 export const api = {
@@ -20,6 +21,15 @@ export const api = {
   /** Whether the app starts with Windows, hidden in the tray. */
   autostart: () => invoke<boolean>("autostart"),
   setAutostart: (on: boolean) => invoke<void>("set_autostart", { on }),
+  /** This app's version, from package.json. */
+  version: () => getVersion(),
+  /**
+   * Look for a newer release and download it. Resolves once it's ready to
+   * install, or to null if this is the latest.
+   */
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  /** Install the downloaded update and restart into it. */
+  installUpdate: () => invoke<void>("install_update"),
   /**
    * What changed in the engine's status, live colors and screen image after
    * `after`. Waits up to a second for something to. Raw bytes, not an event:

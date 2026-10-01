@@ -12,6 +12,7 @@ mod preview;
 mod ptreal;
 mod setup_file;
 mod startup;
+mod updates;
 mod visuals;
 
 use std::time::Duration;
@@ -213,6 +214,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// What the window remembers between launches.
+#[cfg(desktop)]
+const WINDOW_STATE: tauri_plugin_window_state::StateFlags = tauri_plugin_window_state::StateFlags::SIZE
+    .union(tauri_plugin_window_state::StateFlags::POSITION)
+    .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -229,16 +236,14 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(
         tauri_plugin_window_state::Builder::default()
-            .with_state_flags(
-                tauri_plugin_window_state::StateFlags::SIZE
-                    | tauri_plugin_window_state::StateFlags::POSITION
-                    | tauri_plugin_window_state::StateFlags::MAXIMIZED,
-            )
+            .with_state_flags(WINDOW_STATE)
             .build(),
     );
     builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Engine::default())
+        .manage(updates::Updates::default())
         .setup(|app| {
             instance::exit_if_another(&app.config().identifier);
             #[cfg(desktop)]
@@ -275,7 +280,9 @@ pub fn run() {
             setup_file::export_setup,
             setup_file::import_setup,
             autostart,
-            set_autostart
+            set_autostart,
+            updates::check_update,
+            updates::install_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

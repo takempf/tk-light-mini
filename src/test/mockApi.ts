@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { Preview } from "../lib/preview";
+import type { UpdateInfo } from "../lib/types";
 
 let seq = 0;
 /** Messages no poll has taken yet, and polls waiting for one. */
@@ -43,6 +44,9 @@ export function mockApiModule() {
       importSetup: vi.fn(async (): Promise<string | null> => null),
       autostart: vi.fn(async () => false),
       setAutostart: vi.fn(async (_on: boolean) => {}),
+      version: vi.fn(async () => "1.2.3"),
+      checkUpdate: vi.fn(async (): Promise<UpdateInfo | null> => null),
+      installUpdate: vi.fn(async () => {}),
       nextPreview: vi.fn(nextPreview),
       minimize: vi.fn(async () => {}),
       toggleMaximize: vi.fn(async () => {}),

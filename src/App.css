@@ -919,6 +919,29 @@ body {
   color: var(--tk-fg-muted);
   font-size: var(--tk-text-sm);
 }
+.update-setting {
+  display: grid;
+  gap: var(--tk-space-3);
+  padding-top: var(--tk-space-4);
+  border-top: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+.update-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--tk-space-3);
+}
+.update-row .tk-button {
+  flex: none;
+}
+.update-notes {
+  max-height: 8rem;
+  margin: 0;
+  overflow: auto;
+  color: var(--tk-fg-muted);
+  font-size: var(--tk-text-sm);
+  white-space: pre-wrap;
+}
 .app-settings-actions {
   display: flex;
   justify-content: flex-end;

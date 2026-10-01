@@ -3,8 +3,9 @@ import appIcon from "../../src-tauri/icons/32x32.png";
 import bigIcon from "../../src-tauri/icons/128x128.png";
 import { api } from "../lib/api";
 import { flushSaves } from "../lib/storage";
+import { useUpdates } from "../lib/updates";
 import { useScreen, useStore } from "../store";
-import { Logo, Switch } from "../ui";
+import { Button, Logo, Switch } from "../ui";
 import { AppSettings } from "./AppSettings";
 
 /** Windows caption glyphs, drawn on the same 16-unit grid as tk icons. */
@@ -75,6 +76,26 @@ function TitleToggle({
         <span className="titlebar-toggle-state">{checked ? "On" : "Off"}</span>
       </Switch>
     </div>
+  );
+}
+
+/** Shows once an update has downloaded. */
+function UpdateButton() {
+  const status = useUpdates((s) => s.status);
+  const install = useUpdates((s) => s.install);
+  if (status.kind !== "ready" && status.kind !== "installing") return null;
+  const label = `Restart to update to version ${status.update.version}`;
+  return (
+    <Button
+      size="sm"
+      variant="primary"
+      aria-label={label}
+      title={label}
+      disabled={status.kind === "installing"}
+      onClick={() => void install()}
+    >
+      Update
+    </Button>
   );
 }
 
@@ -158,6 +179,7 @@ export function TitleBar() {
         </span>
       </div>
       <div className="titlebar-actions">
+        <UpdateButton />
         <TitleToggle
           label="Lights"
           checked={lightsOn}

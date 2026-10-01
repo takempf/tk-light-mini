@@ -165,3 +165,10 @@ export interface EngineConfig {
     calibration: ResolvedCalibration;
   }[];
 }
+
+/** A newer release, downloaded and ready to install. */
+export interface UpdateInfo {
+  version: string;
+  /** Release notes, as markdown. */
+  notes: string | null;
+}
