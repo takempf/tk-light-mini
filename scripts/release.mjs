@@ -43,6 +43,7 @@ const FILES = {
   conf: at("src-tauri", "tauri.conf.json"),
 };
 const KEY_FILE = join(homedir(), ".tauri", "tk-light-mini.key");
+
 /** Where cargo builds, which CARGO_TARGET_DIR can move. */
 const TARGET = process.env.CARGO_TARGET_DIR
   ? resolve(root, process.env.CARGO_TARGET_DIR)
@@ -54,6 +55,8 @@ const cargoBin = join(homedir(), ".cargo", "bin");
 const env = {
   ...process.env,
   PATH: existsSync(cargoBin) ? `${cargoBin}${delimiter}${process.env.PATH}` : process.env.PATH,
+  // Absolute: tauri runs cargo from src-tauri, not from here.
+  ...(process.env.CARGO_TARGET_DIR ? { CARGO_TARGET_DIR: TARGET } : {}),
 };
 
 /**
