@@ -14,9 +14,9 @@
  * TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,6 +43,11 @@ const FILES = {
   conf: at("src-tauri", "tauri.conf.json"),
 };
 const KEY_FILE = join(homedir(), ".tauri", "tk-light-mini.key");
+/** Where cargo builds, which CARGO_TARGET_DIR can move. */
+const TARGET = process.env.CARGO_TARGET_DIR
+  ? resolve(root, process.env.CARGO_TARGET_DIR)
+  : at("src-tauri", "target");
+const BUNDLE = join(TARGET, "release", "bundle");
 
 // Prefer rustup's cargo over any other on PATH.
 const cargoBin = join(homedir(), ".cargo", "bin");
@@ -96,6 +101,18 @@ function preflight(version) {
   run("gh", ["auth", "status"], { quiet: true });
   const notes = unreleasedNotes(readFileSync(FILES.changelog, "utf8"));
   if (!notes) throw new Error("add notes under ## Unreleased in CHANGELOG.md first");
+  // Windows locks a running exe, and the files next to it, so the build
+  // can't replace them.
+  const exe = join(TARGET, "release", "tk-light-mini.exe");
+  if (existsSync(exe)) {
+    try {
+      closeSync(openSync(exe, "r+"));
+    } catch {
+      throw new Error(
+        `${exe} is running: quit it, or set CARGO_TARGET_DIR to build somewhere else`,
+      );
+    }
+  }
   return signingKey();
 }
 
@@ -123,7 +140,7 @@ function build(version, key) {
     },
   });
   const name = `tk-light-mini_${version}_x64-setup.exe`;
-  const installer = at("src-tauri", "target", "release", "bundle", "nsis", name);
+  const installer = join(BUNDLE, "nsis", name);
   const sigFile = `${installer}.sig`;
   if (!existsSync(installer) || !existsSync(sigFile)) {
     throw new Error(`the build made no ${name} with a .sig`);
@@ -143,7 +160,7 @@ function build(version, key) {
     signature,
     url: assetUrl(version, name),
   });
-  const outDir = at("src-tauri", "target", "release", "bundle", "updater");
+  const outDir = join(BUNDLE, "updater");
   mkdirSync(outDir, { recursive: true });
   const feedFile = join(outDir, "latest.json");
   writeFileSync(feedFile, `${JSON.stringify(feed, null, 2)}\n`);
@@ -223,7 +240,7 @@ async function main() {
   run("git", ["push", "--atomic", "origin", "main", `v${version}`]);
 
   step("Publishing the GitHub release");
-  const notesFile = join(at("src-tauri", "target", "release", "bundle", "updater"), "notes.md");
+  const notesFile = join(BUNDLE, "updater", "notes.md");
   writeFileSync(notesFile, `${built.notes}\n`);
   run("gh", [
     "release",

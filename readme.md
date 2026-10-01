@@ -186,7 +186,9 @@ The release script:
 
 A dry run stops after step 4 and puts the version back.
 
-The updater key is at `~/.tauri/tk-light-mini.key` (or set `TAURI_SIGNING_PRIVATE_KEY` to the key or its path). **Back it up.** Its public half is built into the app, and installed copies accept only updates signed with it. To try an update against a local `latest.json`, set `TK_LIGHT_MINI_UPDATE_URL` to its URL before starting the app.
+The updater key is at `~/.tauri/tk-light-mini.key` (or set `TAURI_SIGNING_PRIVATE_KEY` to the key or its path). **Back it up.** Its public half is built into the app, and installed copies accept only updates signed with it. To try an update against another `latest.json`, set `TK_LIGHT_MINI_UPDATE_URL` to its URL before starting the app (`https`, or `http` in a dev build).
+
+Windows locks a running exe, so quit a copy running from `src-tauri/target/release` before releasing, or set `CARGO_TARGET_DIR` to build somewhere else.
 
 ## Experimental: razer streaming
 
