@@ -99,3 +99,55 @@ describe("AppSettings updates", () => {
     expect(api.checkUpdate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("AppSettings iCUE", () => {
+  it("says it's ready once the app has the SDK file", async () => {
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: true, icue: true });
+    await openSettings();
+    expect(await screen.findByText(/Ready\. Corsair lights show up/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download from Corsair" })).toBeNull();
+  });
+
+  it("downloads the SDK at the user's request, then scans", async () => {
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: false, icue: true });
+    const user = await openSettings();
+    expect(await screen.findByText(/Corsair's license doesn't let/)).toBeInTheDocument();
+    expect(api.downloadIcueSdk).not.toHaveBeenCalled();
+
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: true, icue: true });
+    await user.click(screen.getByRole("button", { name: "Download from Corsair" }));
+    expect(api.downloadIcueSdk).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Ready\./)).toBeInTheDocument();
+    expect(api.discoverDevices).toHaveBeenCalled();
+  });
+
+  it("takes a file the user picks, and does nothing if they cancel", async () => {
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: false, icue: true });
+    vi.mocked(api.chooseIcueSdk).mockResolvedValue(false);
+    const user = await openSettings();
+    await user.click(await screen.findByRole("button", { name: "Choose file…" }));
+    expect(api.chooseIcueSdk).toHaveBeenCalledTimes(1);
+    expect(api.discoverDevices).not.toHaveBeenCalled();
+
+    vi.mocked(api.chooseIcueSdk).mockResolvedValue(true);
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: true, icue: true });
+    await user.click(screen.getByRole("button", { name: "Choose file…" }));
+    expect(await screen.findByText(/Ready\./)).toBeInTheDocument();
+    expect(api.discoverDevices).toHaveBeenCalled();
+  });
+
+  it("says why getting it failed", async () => {
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: false, icue: true });
+    vi.mocked(api.downloadIcueSdk).mockRejectedValue("download: offline");
+    const user = await openSettings();
+    await user.click(await screen.findByRole("button", { name: "Download from Corsair" }));
+    expect(await screen.findByText("download: offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download from Corsair" })).toBeEnabled();
+  });
+
+  it("says when iCUE itself isn't installed", async () => {
+    vi.mocked(api.icueStatus).mockResolvedValue({ sdk: false, icue: false });
+    await openSettings();
+    expect(await screen.findByText(/iCUE isn't installed/)).toBeInTheDocument();
+  });
+});

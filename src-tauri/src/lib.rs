@@ -5,6 +5,7 @@ mod color;
 mod engine;
 mod govee;
 mod icue;
+mod icue_dll;
 mod instance;
 mod paths;
 mod preview;
@@ -246,6 +247,9 @@ pub fn run() {
         .manage(updates::Updates::default())
         .setup(|app| {
             instance::exit_if_another(&app.config().identifier);
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                icue_dll::set_dir(dir);
+            }
             #[cfg(desktop)]
             {
                 setup_tray(app)?;
@@ -282,7 +286,10 @@ pub fn run() {
             autostart,
             set_autostart,
             updates::check_update,
-            updates::install_update
+            updates::install_update,
+            icue_dll::icue_status,
+            icue_dll::download_icue_sdk,
+            icue_dll::choose_icue_sdk
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

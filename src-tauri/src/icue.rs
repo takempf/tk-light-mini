@@ -1,12 +1,10 @@
 //! Lights inside this PC, through Corsair iCUE's SDK: fans, cooler, RAM,
 //! whatever iCUE sees.
 //!
-//! The SDK's client DLL, `iCUESDK.x64_2019.dll` from
-//! github.com/CorsairOfficial/cue-sdk/releases, goes next to the app's exe:
-//! build.rs fetches it and the Windows bundle config ships it. With it
-//! there, the app starts iCUE hidden in the tray when it needs it, and
-//! closes it on exit if it started it. Without it, iCUE is left alone. One
-//! session lasts until the app exits.
+//! The SDK's client DLL doesn't ship with the app: see `icue_dll`. With it,
+//! the app starts iCUE hidden in the tray when it needs it, and closes it on
+//! exit if it started it. Without it, iCUE is left alone. One session lasts
+//! until the app exits.
 //!
 //! The engine hands the latest segment colors to one thread, which stretches
 //! them over each device's LEDs and sends them, so a slow reply from iCUE
@@ -16,7 +14,7 @@ use libloading::Library;
 use parking_lot::{Condvar, Mutex};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
@@ -27,7 +25,7 @@ use crate::govee::{pulse_level, Device, IDENTIFY_COLOR, IDENTIFY_DURATION};
 
 /// App ids of iCUE lights start with this, then iCUE's device id.
 pub const PREFIX: &str = "icue:";
-const DLL: &str = "iCUESDK.x64_2019.dll";
+use crate::icue_dll::NAME as DLL;
 
 const STRING_M: usize = 128;
 const DEVICE_COUNT_MAX: usize = 64;
@@ -137,18 +135,16 @@ unsafe extern "C" fn on_state(_: *mut c_void, e: *const i32) {
     }
 }
 
-fn dll_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let p = exe.parent()?.join(DLL);
-    p.exists().then_some(p)
+/// Whether `path` loads as the SDK, with every function the app calls.
+pub fn check_dll(path: &Path) -> Result<(), String> {
+    Sdk::load(path).map(drop)
 }
 
 impl Sdk {
-    fn load() -> Result<Self, String> {
-        let path = dll_path().ok_or_else(|| format!("{DLL} is not next to the app"))?;
+    fn load(path: &Path) -> Result<Self, String> {
         // SAFETY: Corsair's SDK client; the signatures match iCUESDK.h v4.
         unsafe {
-            let lib = Library::new(&path).map_err(|e| format!("load {DLL}: {e}"))?;
+            let lib = Library::new(path).map_err(|e| format!("load {DLL}: {e}"))?;
             macro_rules! sym {
                 ($name:literal) => {
                     *lib.get($name).map_err(|e| format!("{}: {e}", $name))?
@@ -297,7 +293,10 @@ fn with_sdk<R>(wait: Duration, f: impl FnOnce(&Sdk) -> Result<R, String>) -> Res
         return Err(NOT_RUNNING.into());
     }
     if s.sdk.is_none() {
-        let sdk = Sdk::load().inspect_err(|_| s.failed_at = Some(Instant::now()))?;
+        let sdk = crate::icue_dll::find()
+            .ok_or_else(|| format!("no {DLL}: get it in Settings"))
+            .and_then(|path| Sdk::load(&path))
+            .inspect_err(|_| s.failed_at = Some(Instant::now()))?;
         // The session reconnects by itself if iCUE restarts.
         check(unsafe { (sdk.connect)(on_state, std::ptr::null_mut()) })?;
         s.sdk = Some(sdk);
@@ -315,6 +314,17 @@ fn with_sdk<R>(wait: Duration, f: impl FnOnce(&Sdk) -> Result<R, String>) -> Res
     }
     s.failed_at = None;
     f(s.sdk.as_ref().expect("loaded above"))
+}
+
+/// Try again at the next use, without waiting out an earlier failure: the
+/// DLL just arrived.
+pub fn retry_now() {
+    session().lock().failed_at = None;
+}
+
+/// Whether iCUE itself is installed.
+pub fn installed() -> bool {
+    app::exe().is_some()
 }
 
 /// Starting and closing iCUE itself, so the user never has to.
@@ -351,7 +361,7 @@ mod app {
 
     /// The newest `iCUE.exe` under Program Files\Corsair. Updates can leave
     /// older copies in other folders.
-    fn exe() -> Option<PathBuf> {
+    pub fn exe() -> Option<PathBuf> {
         let corsair = PathBuf::from(std::env::var_os("ProgramFiles")?).join("Corsair");
         std::fs::read_dir(corsair)
             .ok()?

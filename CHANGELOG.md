@@ -11,7 +11,8 @@ First release.
 - Razer streaming for lights that support it: no built-in fade, and a color per segment.
 - Split a light into sections, give segments fixed colors, or follow a painted scene instead of the screen.
 - Match the wall to the screen with per-light calibration.
-- Corsair fans, coolers, strips and RAM join in through iCUE.
+- Corsair fans, coolers, strips and RAM join in through iCUE. Settings downloads Corsair's SDK file from Corsair, at your request.
 - Export and import your setup.
 - Start with Windows, in the tray.
 - Updates itself from GitHub releases.
+- MIT licensed.

@@ -919,11 +919,22 @@ body {
   color: var(--tk-fg-muted);
   font-size: var(--tk-text-sm);
 }
+.icue-setting,
 .update-setting {
   display: grid;
   gap: var(--tk-space-3);
   padding-top: var(--tk-space-4);
   border-top: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+.icue-setting {
+  gap: var(--tk-space-2);
+}
+.icue-setting .setting-hint {
+  margin: 0;
+}
+.icue-actions {
+  display: flex;
+  gap: var(--tk-space-2);
 }
 .update-row {
   display: flex;

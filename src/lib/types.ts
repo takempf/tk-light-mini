@@ -172,3 +172,11 @@ export interface UpdateInfo {
   /** Release notes, as markdown. */
   notes: string | null;
 }
+
+/** What lights through iCUE need. */
+export interface IcueStatus {
+  /** The app has Corsair's SDK file. */
+  sdk: boolean;
+  /** iCUE itself is installed. */
+  icue: boolean;
+}
