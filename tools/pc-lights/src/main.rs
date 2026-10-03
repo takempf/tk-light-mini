@@ -32,6 +32,14 @@ USAGE:
                                       Corsair Lighting Node / Commander Pro, direct mode
   pc-lights node fans [--channel N] [--hold SECS]
                                       each fan port its own color, to map fan positions
+  pc-lights node anim [fans|rainbow|chase] [--fps N] [--secs N] [--channel N] [--port-type N]
+                                      animate the fans, report the rate the node kept up
+  pc-lights node diag [--channel N] [--port-type N]
+                                      numbered steps to find what makes the fans blink
+                                      --port-type: LED chip, 1 WS2812B or 2 UCS1903 (saved on the node)
+  pc-lights node off [--channel N]    save static black at brightness 0 as the node's own effect
+  pc-lights node brightness <0-100> [--channel N]
+                                      the node's brightness for a channel
   pc-lights hydro set <color> [--leds N] [--hold SECS]
                                       Corsair Hydro Platinum / PRO XT pump head
   pc-lights lamp set <color>          Windows Dynamic Lighting (LampArray) devices
@@ -86,6 +94,29 @@ fn run(args: &[String]) -> Result<(), String> {
             let channel = flags.num("channel")?.unwrap_or(0) as u8;
             corsair_node::fans(channel, flags.num("hold")?.unwrap_or(20))
         }
+        ["node", "anim", rest @ ..] if rest.len() <= 1 => {
+            warn_rgb_software();
+            corsair_node::anim(
+                flags.num("channel")?.unwrap_or(0) as u8,
+                rest.first().copied().unwrap_or("fans"),
+                flags.num("fps")?.unwrap_or(30),
+                flags.num("secs")?.unwrap_or(20),
+                port_type(&flags)?,
+            )
+        }
+        ["node", "diag"] => {
+            warn_rgb_software();
+            corsair_node::diag(flags.num("channel")?.unwrap_or(0) as u8, port_type(&flags)?)
+        }
+        ["node", "off"] => {
+            warn_rgb_software();
+            corsair_node::off(flags.num("channel")?.unwrap_or(0) as u8)
+        }
+        ["node", "brightness", n] => corsair_node::brightness(
+            flags.num("channel")?.unwrap_or(0) as u8,
+            n.parse()
+                .map_err(|_| format!("brightness is 0 to 100, got {n}"))?,
+        ),
         ["hydro", "set", c] => {
             warn_rgb_software();
             let leds = flags
@@ -111,6 +142,14 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         _ => Err(format!("unknown command: {}\n\n{USAGE}", args.join(" "))),
+    }
+}
+
+fn port_type(flags: &util::Flags) -> Result<Option<u8>, String> {
+    match flags.num("port-type")? {
+        Some(t @ 1..=2) => Ok(Some(t as u8)),
+        Some(t) => Err(format!("--port-type is 1 or 2, got {t}")),
+        None => Ok(None),
     }
 }
 
