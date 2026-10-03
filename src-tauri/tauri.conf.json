@@ -42,7 +42,7 @@
     "publisher": "kempf",
     "license": "MIT",
     "category": "Utility",
-    "shortDescription": "Screen-reactive ambient lighting for Govee and iCUE lights",
+    "shortDescription": "Screen-reactive ambient lighting for Govee lights",
     "homepage": "https://github.com/takempf/tk-light-mini",
     "windows": {
       "nsis": {

@@ -85,7 +85,6 @@ fn let_go(app: &AppHandle) {
     use tauri_plugin_window_state::AppHandleExt;
     let _ = app.save_window_state(crate::WINDOW_STATE);
     app.state::<crate::engine::Engine>().shutdown();
-    crate::icue::close();
 }
 
 #[cfg(test)]

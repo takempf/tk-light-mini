@@ -63,9 +63,6 @@ const calls: [string, () => Promise<unknown>][] = [
   ["setAutostart", () => api.setAutostart(true)],
   ["checkUpdate", () => api.checkUpdate()],
   ["installUpdate", () => api.installUpdate()],
-  ["icueStatus", () => api.icueStatus()],
-  ["downloadIcueSdk", () => api.downloadIcueSdk()],
-  ["chooseIcueSdk", () => api.chooseIcueSdk()],
   ["nextPreview", () => api.nextPreview(0)],
 ];
 

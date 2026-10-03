@@ -24,14 +24,6 @@ if-addrs = "0.15"
 parking_lot = "0.12"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
-# PC lights through iCUE: its SDK DLL is loaded at runtime.
-libloading = "0.9"
-# Fetching that DLL at the user's request. Same crates and features the
-# updater uses, plus deflate to unzip.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy"] }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
-zip = { version = "4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-sha2 = "0.10"
 
 [dev-dependencies]
 # Mock runtime, to run the real updater in tests.

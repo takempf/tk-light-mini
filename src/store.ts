@@ -30,7 +30,6 @@ import type {
   Source,
   Tuning,
 } from "./lib/types";
-import { isPcLight } from "./lib/types";
 
 export const DEFAULT_SETTINGS: Settings = {
   fps: 30,
@@ -40,7 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 /** Saved-state version. Bump it, and add to `migrate`, when the saved shape changes. */
-const VERSION = 8;
+const VERSION = 9;
 
 /** A whole light (`section: null`) or one of its paths. */
 export interface Selection {
@@ -298,8 +297,7 @@ export const useStore = create<AppState>()(
                       name: d.sku || d.id,
                       on: true,
                       brightness: 1,
-                      // PC lights always stream one color per segment.
-                      razer: isPcLight(d),
+                      razer: false,
                       sections: [{ count: 1, color: "path", path: linePath() }],
                     },
                   ],
@@ -576,6 +574,10 @@ export function migrate(old: unknown, version: number): AppState {
   // v8: the lights follow a canvas, the screen until picked otherwise.
   if (version < 8 && s.settings) {
     s.settings = { ...s.settings, canvas: s.settings.canvas ?? "screen" };
+  }
+  // v9: Corsair lights through iCUE are gone.
+  if (version < 9 && s.devices) {
+    s.devices = s.devices.filter((d) => !d.ip.startsWith("icue:"));
   }
   return s as unknown as AppState;
 }

@@ -1,7 +1,7 @@
 import { type CSSProperties, memo, useEffect, useId, useRef, useState } from "react";
 import { sectionName, sectionStarts, sectionsOf } from "../lib/lights";
 import { readSaved, saveLater } from "../lib/storage";
-import { type AddedDevice, type GoveeDevice, isPcLight } from "../lib/types";
+import type { AddedDevice, GoveeDevice } from "../lib/types";
 import { useStore } from "../store";
 import { Button, Eyebrow, Icon, Menu, Switch } from "../ui";
 import { CanvasSettings } from "./CanvasSettings";
@@ -151,7 +151,7 @@ function FoundRow({ device }: { device: GoveeDevice }) {
       <span className="light-title">
         <span className="light-name">{name}</span>
         <span className="meta">
-          {isPcLight(device) ? "Through iCUE" : `${device.ip} · ${device.id}`}
+          {device.ip} · {device.id}
         </span>
       </span>
       <Button size="sm" aria-label={`Add ${name}`} onClick={() => add(device)}>

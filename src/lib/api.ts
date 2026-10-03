@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
 import { decodePreview, type Preview } from "./preview";
-import type { EngineConfig, GoveeDevice, IcueStatus, MonitorInfo, UpdateInfo } from "./types";
+import type { EngineConfig, GoveeDevice, MonitorInfo, UpdateInfo } from "./types";
 
 /** Thin wrapper over Tauri IPC, so tests can mock one module. */
 export const api = {
@@ -30,12 +30,6 @@ export const api = {
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
   /** Install the downloaded update and restart into it. */
   installUpdate: () => invoke<void>("install_update"),
-  /** Whether the app has iCUE's SDK file, and whether iCUE is installed. */
-  icueStatus: () => invoke<IcueStatus>("icue_status"),
-  /** Download iCUE's SDK file from Corsair's release on GitHub. */
-  downloadIcueSdk: () => invoke<void>("download_icue_sdk"),
-  /** Ask for iCUE's SDK file and keep a copy. False if cancelled. */
-  chooseIcueSdk: () => invoke<boolean>("choose_icue_sdk"),
   /**
    * What changed in the engine's status, live colors and screen image after
    * `after`. Waits up to a second for something to. Raw bytes, not an event:

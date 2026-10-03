@@ -2003,7 +2003,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading 0.7.4",
+ "libloading",
  "once_cell",
 ]
 
@@ -2030,16 +2030,6 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
-]
-
-[[package]]
-name = "libloading"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
-dependencies = [
- "cfg-if",
- "windows-link",
 ]
 
 [[package]]
@@ -4134,13 +4124,9 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "if-addrs",
- "libloading 0.9.0",
  "parking_lot",
- "reqwest",
- "rustls",
  "serde",
  "serde_json",
- "sha2",
  "socket2",
  "tauri",
  "tauri-build",
@@ -4149,7 +4135,6 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "windows",
- "zip",
 ]
 
 [[package]]
@@ -5410,7 +5395,6 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
- "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]

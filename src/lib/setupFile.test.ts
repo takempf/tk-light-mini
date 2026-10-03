@@ -20,19 +20,16 @@ describe("setup file", () => {
     expect(readSetupText(setupText(setup, 8), 8)).toEqual({ state: setup, version: 8 });
   });
 
-  it("keeps a light inside the PC, found again by its iCUE id", () => {
+  it("drops Corsair lights from before iCUE support was removed", () => {
     const fans: AddedDevice = {
       ...light,
       id: "icue:{fdbcaa26-7194-45f1-a2ed-d2aeff182ac0}",
       ip: "icue:{fdbcaa26-7194-45f1-a2ed-d2aeff182ac0}",
       sku: "VENGEANCE PC",
-      razer: true,
-      segments: 6,
     };
-    const setup = { devices: [fans], settings: DEFAULT_SETTINGS };
-    const back = readSetupText(setupText(setup, 8), 8).state.devices[0];
-    expect(back).toEqual(fans);
-    expect(migrate({ devices: [back], settings: DEFAULT_SETTINGS }, 8).devices[0]).toEqual(fans);
+    const setup = { devices: [light, fans], settings: DEFAULT_SETTINGS };
+    const { state, version } = readSetupText(setupText(setup, 8), 9);
+    expect(migrate(state, version).devices).toEqual([light]);
   });
 
   it("reads older versions, to migrate", () => {

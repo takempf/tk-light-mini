@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import type { IcueStatus } from "../lib/types";
 import { type UpdateStatus, useUpdates } from "../lib/updates";
-import { useStore } from "../store";
 import { Button, Dialog, Icon, Switch } from "../ui";
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -44,82 +42,6 @@ function StartupSetting() {
       </Switch>
       <p className="setting-hint">Opens in the tray when you sign in.</p>
       {error && <p className="error">{error}</p>}
-    </div>
-  );
-}
-
-/**
- * Lights through iCUE need Corsair's SDK file, which the app can't ship.
- * Get it here, from Corsair's release or a copy the user has.
- */
-function IcueSetting() {
-  const [status, setStatus] = useState<IcueStatus | null>(null);
-  const [busy, setBusy] = useState<"download" | "choose" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    api
-      .icueStatus()
-      .then((s) => live && setStatus(s))
-      .catch((e) => live && setError(errorText(e)));
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const get = async (how: "download" | "choose") => {
-    setError(null);
-    setBusy(how);
-    try {
-      if (how === "download") await api.downloadIcueSdk();
-      // False if the user cancelled the dialog.
-      const got = how === "download" || (await api.chooseIcueSdk());
-      if (got) {
-        setStatus(await api.icueStatus());
-        // Find the lights it opens up.
-        void useStore.getState().scan();
-      }
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="icue-setting">
-      <div>Corsair iCUE</div>
-      {status?.sdk ? (
-        <p className="setting-hint">Ready. Corsair lights show up when you scan.</p>
-      ) : (
-        status && (
-          <>
-            <p className="setting-hint">
-              For Corsair fans, coolers and RAM, the app needs Corsair's SDK file,{" "}
-              <code>iCUESDK.x64_2019.dll</code>. Corsair's license doesn't let the app include it.
-              Download it from Corsair's GitHub release, or pick the file if you have it.
-            </p>
-            <div className="icue-actions">
-              <Button size="sm" disabled={busy !== null} onClick={() => void get("download")}>
-                {busy === "download" ? "Downloading…" : "Download from Corsair"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy !== null}
-                onClick={() => void get("choose")}
-              >
-                Choose file…
-              </Button>
-            </div>
-          </>
-        )
-      )}
-      {status && !status.icue && (
-        <p className="setting-hint">iCUE isn't installed. Install it from corsair.com too.</p>
-      )}
-      {error && <p className="setting-hint error">{error}</p>}
     </div>
   );
 }
@@ -206,7 +128,6 @@ export function AppSettings() {
       <Dialog.Popup size="sm" className="app-settings">
         <Dialog.Title>Settings</Dialog.Title>
         <StartupSetting />
-        <IcueSetting />
         <UpdateSetting />
         <div className="app-settings-actions">
           <Dialog.Close render={<Button size="sm" />}>Done</Dialog.Close>

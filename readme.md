@@ -93,19 +93,6 @@ How it works: each test color is a corner of the RGB color cube. The app sends t
 - The light and the PC have to be on the same subnet. Guest networks, IoT networks and some mesh setups block this.
 - Allow the app through Windows Firewall when it asks. Scan replies come in on UDP port 4002.
 
-### Lights inside the PC
-
-Corsair fans, coolers, LED strips and RAM can join in through iCUE, which has to be installed. So can anything else iCUE lights: Corsair keyboards, mice and headset stands, and the boards and graphics cards iCUE supports.
-
-The app also needs Corsair's SDK file, `iCUESDK.x64_2019.dll`. Corsair's license doesn't let the app include it, so you get it once:
-
-1. Open **Settings** and, under **Corsair iCUE**, click **Download from Corsair**. That downloads the SDK from [Corsair's cue-sdk releases](https://github.com/CorsairOfficial/cue-sdk/releases) (v4.0.84, checked against its known SHA-256). If you already have the file, **Choose file…** uses it instead.
-2. **Scan**. They show up marked "Through iCUE".
-
-The app keeps its copy in its data folder (`%LOCALAPPDATA%\dev.kempf.tklightmini`), and also finds one next to its exe. With the DLL there, the app starts iCUE hidden in the tray whenever it needs it (the first scan waits a few seconds for it), and closes it on quit if the app started it. Without the DLL, the app leaves iCUE alone.
-
-Each light starts with a segment per fan, strip or pump (in the order they're chained) or per RAM stick, and anything else as one. With a segment each, a fan gets all its LEDs even when fans of different sizes share a hub. Other counts spread evenly over the LEDs, in the order iCUE draws them: around a pump's ring, and left to right across a keyboard. While the app runs, iCUE's own effects stay off the lights it drives. **Off** turns a light black, since it has no power switch of its own, and it stays black. After the app quits, the lights show their built-in effects.
-
 ## How it works
 
 About 30 times a second:
@@ -117,7 +104,7 @@ About 30 times a second:
    - lets bright, saturated pixels set the hue, so a dim background doesn't wash it out
    - keeps brightness true to the scene
 3. **Smooth.** Colors fade toward their target at the same speed whatever the frame rate.
-4. **Send.** Each light gets its color over UDP (Govee's LAN API). It only sends when the color changes, plus once a second in case a packet gets lost. Lights inside the PC go through iCUE's SDK on their own thread, so a slow reply never holds up the rest.
+4. **Send.** Each light gets its color over UDP (Govee's LAN API). It only sends when the color changes, plus once a second in case a packet gets lost.
 
 The capture thread and its GPU work both run at low priority, so the game always goes first. The preview in the window only updates while the window is visible.
 
@@ -230,7 +217,7 @@ cargo test -- --ignored live_pt_walk --nocapture    # ptReal: one segment walks 
 
 ## License
 
-[MIT](LICENSE). Corsair's iCUE SDK isn't part of the app and isn't covered by it: it's under Corsair's own license.
+[MIT](LICENSE).
 
 ## Limits
 

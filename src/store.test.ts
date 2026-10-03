@@ -108,15 +108,6 @@ describe("devices", () => {
     expect(selection).toEqual({ id: lamp.id, section: null });
   });
 
-  it("adds an iCUE fan hub with the scan's segment per fan", () => {
-    const fans: GoveeDevice = { id: "icue:{f}", ip: "icue:{f}", sku: "VENGEANCE PC", segments: 6 };
-    useStore.getState().addDevice(fans);
-    expect(useStore.getState().devices[0]?.razer).toBe(true);
-    const d = toEngineConfig(useStore.getState()).devices[0];
-    expect(d?.ip).toBe("icue:{f}");
-    expect(d?.segments).toHaveLength(6);
-  });
-
   it("switches a light off and back on", () => {
     const s = useStore.getState();
     s.addDevice(lamp);

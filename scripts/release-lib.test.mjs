@@ -1,6 +1,6 @@
 // @ts-check
 import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -228,14 +228,6 @@ describe("release config", () => {
   it("has one version, in package.json, that Cargo.toml matches", () => {
     expect(conf.version).toBe("../package.json");
     expect(cargoVersion(read("src-tauri", "Cargo.toml"))).toBe(pkg.version);
-  });
-
-  it("doesn't ship Corsair's iCUE SDK, whose license doesn't allow it", () => {
-    const configs = readdirSync(join(process.cwd(), "src-tauri")).filter((f) =>
-      /^tauri(\..+)?\.conf\.json$/.test(f),
-    );
-    expect(configs).toContain("tauri.conf.json");
-    for (const f of configs) expect(read("src-tauri", f)).not.toMatch(/iCUESDK/i);
   });
 
   it("builds signed installers the updater can use", () => {
