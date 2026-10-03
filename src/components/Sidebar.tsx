@@ -16,6 +16,34 @@ function savedSplit() {
   return Number.isFinite(value) ? clampSplit(value) : 40;
 }
 
+/** A panel's open state, remembered across launches. */
+function useSavedOpen(key: string, initial: boolean) {
+  const [open, setOpen] = useState(() => {
+    const saved = readSaved(key);
+    return saved === null ? initial : saved === "true";
+  });
+  useEffect(() => saveLater(key, () => String(open)), [key, open]);
+  return [open, setOpen] as const;
+}
+
+const COLLAPSED_KEY = "tk-light-mini-collapsed-lights";
+
+/** Ids of lights whose sections are folded away. */
+function collapsedLights(): string[] {
+  try {
+    const ids: unknown = JSON.parse(readSaved(COLLAPSED_KEY) ?? "[]");
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCollapsed(id: string, collapsed: boolean) {
+  const ids = collapsedLights().filter((other) => other !== id);
+  if (collapsed) ids.push(id);
+  saveLater(COLLAPSED_KEY, () => JSON.stringify(ids));
+}
+
 function PanelHeading({
   title,
   controls,
@@ -45,7 +73,7 @@ function PanelHeading({
 
 /** One light and its sections. Re-renders only when the light changes. */
 const LightRow = memo(function LightRow({ device }: { device: AddedDevice }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(() => !collapsedLights().includes(device.id));
   const selection = useStore((s) => s.selection);
   const select = useStore((s) => s.select);
   const setPower = useStore((s) => s.setPower);
@@ -73,7 +101,10 @@ const LightRow = memo(function LightRow({ device }: { device: AddedDevice }) {
             className="layer-expand"
             aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`}
             aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
+            onClick={() => {
+              saveCollapsed(device.id, expanded);
+              setExpanded(!expanded);
+            }}
           >
             <Icon name="chevron-right" />
           </button>
@@ -255,9 +286,9 @@ export function Sidebar() {
   const drag = useRef<{ y: number; split: number; height: number; pointer: number } | null>(null);
   const [split, setSplit] = useState(savedSplit);
   const [resizing, setResizing] = useState(false);
-  const [lightsOpen, setLightsOpen] = useState(true);
-  const [detailsOpen, setDetailsOpen] = useState(true);
-  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [lightsOpen, setLightsOpen] = useSavedOpen("tk-light-mini-lights-open", true);
+  const [detailsOpen, setDetailsOpen] = useSavedOpen("tk-light-mini-details-open", true);
+  const [canvasOpen, setCanvasOpen] = useSavedOpen("tk-light-mini-canvas-open", false);
   const layersId = useId();
   const lightsBodyId = useId();
   const detailsId = useId();

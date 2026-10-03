@@ -111,6 +111,38 @@ describe("App", () => {
     expect(screen.queryByRole("slider", { name: "Saturation" })).toBeNull();
   });
 
+  it("remembers which panels and lights are collapsed", async () => {
+    useStore.setState({
+      devices: [
+        light({
+          razer: true,
+          segments: 4,
+          sections: [
+            { count: 2, color: "path" },
+            { count: 2, color: "path" },
+          ],
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    await user.click(screen.getByRole("button", { name: "Collapse Lamp" }));
+    first.unmount();
+    render(<App />);
+    expect(screen.getByRole("button", { name: "Lights" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Canvas" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Expand Lamp" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("keeps grouped paths visible while editing in the separate details pane", async () => {
     const path: LightPath = {
       points: [
