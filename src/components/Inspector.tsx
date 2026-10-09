@@ -22,6 +22,7 @@ import type { AddedDevice, Fit, LightPath, Section, Source } from "../lib/types"
 import { useScreenAspect, useStore } from "../store";
 import { Badge, Button, Icon, Input, Switch, Toggle, ToggleGroup } from "../ui";
 import { ColorPicker } from "./ColorPicker";
+import { FrameSourcePicker } from "./FrameSourcePicker";
 import { SegmentBar } from "./SegmentBar";
 import { pct, Slider, vh } from "./Slider";
 
@@ -252,6 +253,7 @@ function SectionEditor({
   onSelect: (s: Set<number>) => void;
 }) {
   const setSectionColor = useStore((s) => s.setSectionColor);
+  const setSectionFrameSource = useStore((s) => s.setSectionFrameSource);
   const setSegmentColors = useStore((s) => s.setSegmentColors);
   const sections = sectionsOf(device);
   const sec = sections[section];
@@ -315,6 +317,13 @@ function SectionEditor({
           }
         />
       </div>
+      {import.meta.env.VITE_ADMIN === "1" && sec.color === "path" && (
+        <FrameSourcePicker
+          label="Canvas source"
+          value={sec.source}
+          onChange={(source) => setSectionFrameSource(device.id, section, source)}
+        />
+      )}
       <Placement device={device} section={section} />
     </div>
   );
@@ -369,6 +378,7 @@ export function Inspector({ device, section }: { device: AddedDevice; section: n
   const setFill = useStore((s) => s.setFill);
   const remove = useStore((s) => s.removeDevice);
   const setBrightness = useStore((s) => s.setDeviceBrightness);
+  const setDeviceFrameSource = useStore((s) => s.setDeviceFrameSource);
   const setRazer = useStore((s) => s.setRazer);
   const setSegments = useStore((s) => s.setSegments);
   const split = useStore((s) => s.splitSection);
@@ -413,6 +423,13 @@ export function Inspector({ device, section }: { device: AddedDevice; section: n
             format={pct}
             onChange={(v) => setBrightness(device.id, v)}
           />
+          {import.meta.env.VITE_ADMIN === "1" && (
+            <FrameSourcePicker
+              label="Canvas source"
+              value={device.source}
+              onChange={(source) => setDeviceFrameSource(device.id, source)}
+            />
+          )}
           <Switch checked={device.razer} onCheckedChange={(on: boolean) => setRazer(device.id, on)}>
             Razer streaming{" "}
             <Badge className="experimental-tag" tone="warning">

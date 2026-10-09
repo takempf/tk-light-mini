@@ -1,0 +1,25 @@
+{
+  "name": "@tk-light/admin-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.8.0",
+    "@fontsource-variable/archivo": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@tauri-apps/api": "^2.12.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tk-design-system": "github:takempf/tk-design-system",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.3.0",
+    "typescript": "~6.0.3"
+  }
+}

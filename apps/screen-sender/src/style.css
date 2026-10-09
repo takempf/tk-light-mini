@@ -1,0 +1,53 @@
+:root {
+  color-scheme: dark;
+  font:
+    14px system-ui,
+    sans-serif;
+  background: #161a1e;
+  color: #f4f5f6;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 20px;
+}
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.5rem;
+}
+p {
+  color: #b7c0ca;
+}
+form {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 1.5rem;
+}
+label {
+  display: grid;
+  gap: 0.25rem;
+}
+input,
+select,
+button {
+  font: inherit;
+  border-radius: 5px;
+  border: 1px solid #58616d;
+  padding: 0.5rem;
+  background: #222a31;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+  background: #246fcb;
+  border-color: #246fcb;
+}
+#status {
+  margin-top: 1.25rem;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

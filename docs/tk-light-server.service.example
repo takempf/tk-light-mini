@@ -1,0 +1,16 @@
+[Unit]
+Description=tk-light control server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tk-light
+WorkingDirectory=/opt/tk-light-mini/apps/control-server
+EnvironmentFile=/etc/tk-light-mini/server.env
+ExecStart=/usr/bin/env node --import tsx src/main.ts
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

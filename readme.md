@@ -1,5 +1,45 @@
 # tk-light-mini
 
+## Always-on control server
+
+This repository now contains a Node.js control server, a browser admin panel, and a small Windows screen sender. The original desktop controller remains at the repository root for setup export and migration. Run only one controller for a light at a time.
+
+The [architecture and delivery plan](docs/monorepo-plan.md) describes the data flow, persistence, security, and verification gates.
+
+### Run the new apps
+
+Install Node 22+, pnpm, and Rust for the Windows sender. On the always-on machine, keep the control server on the same LAN as the Govee lights. Enable LAN Control for each light in the Govee Home app.
+
+```sh
+pnpm install
+pnpm --filter @tk-light/admin-web build
+cd apps/control-server
+TK_LIGHT_ADMIN_TOKEN='your-long-random-admin-token' \
+TK_LIGHT_SENDERS='{"office-pc":"your-long-random-sender-token"}' \
+TK_LIGHT_HOST=0.0.0.0 pnpm start
+```
+
+Generate two independent tokens with `openssl rand -hex 24`. The server serves the admin panel at port 8787 and keeps its setup in `apps/control-server/data/setup.json` by default. A prior setup is copied to `setup.json.bak` on save. Use the [environment example](apps/control-server/server.env.example) for the available settings. Restrict network access to the intended LAN; use TLS through a reverse proxy if publishing the service beyond it.
+
+Open `http://SERVER:8787`, enter the admin token, and scan for lights. In the Windows sender, enter the same server URL, its sender ID and sender token, and choose a monitor. Build or run it with:
+
+```sh
+pnpm --filter @tk-light/screen-sender tauri dev
+pnpm --filter @tk-light/screen-sender tauri build
+```
+
+The sender publishes downscaled frames to the server. The server alone sends Govee UDP commands. In the admin panel, select a room canvas and optionally override it for a light or section. Remote screens fall back to the night forest scene if the sender goes offline. Fixed colors and scenes keep running while the browser and sender are closed.
+
+To move an existing setup, export it from the original desktop app, stop its syncing, then import the file in the browser admin panel. Review the lights before enabling server syncing. The original controller's release process remains documented below for existing installations.
+
+For development, run `pnpm --filter @tk-light/control-server dev` and `pnpm --filter @tk-light/admin-web dev` in separate shells. The admin dev server proxies `/api` to port 8787. Run `pnpm check` for frontend, server, and Rust checks. Tests that bind a local port or use real lights may need host permissions.
+
+### Run as a service
+
+On Linux, run `pnpm start` from `apps/control-server` under a dedicated user. Use the [systemd unit example](docs/tk-light-server.service.example), set its working directory and Node path for your installation, and keep `data/` writable by that user. Put `TK_LIGHT_ADMIN_TOKEN`, `TK_LIGHT_SENDERS`, and `TK_LIGHT_HOST` in its environment file. Build the admin panel before starting the service. The admin panel is part of the same service and does not need a separate web host.
+
+## Original desktop controller
+
 Makes your Govee lights match what's on your screen, so the wall behind the TV glows with the picture. Windows only.
 
 It's built to stay out of the way. If you're gaming, it shouldn't cost you frames.

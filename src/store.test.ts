@@ -411,6 +411,25 @@ describe("setup file", () => {
     await useStore.getState().importSetup();
     expect(useStore.getState().settings.canvas).toBe("screen");
   });
+
+  it("starts an imported setup with server syncing disabled", async () => {
+    vi.stubEnv("VITE_ADMIN", "1");
+    try {
+      useStore.getState().setEnabled(true);
+      vi.mocked(api.importSetup).mockResolvedValueOnce(
+        JSON.stringify({
+          kind: "light-mini-setup",
+          version: 9,
+          devices: [],
+          settings: DEFAULT_SETTINGS,
+        }),
+      );
+      await useStore.getState().importSetup();
+      expect(useStore.getState().enabled).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("migrate from v6", () => {

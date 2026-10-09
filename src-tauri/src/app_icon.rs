@@ -129,27 +129,36 @@ pub fn follow(app: tauri::AppHandle, latest: Arc<Latest>) {
     use tauri::image::Image;
     use tauri::Manager;
 
+    fn overlay(
+        base: &Option<tauri_runtime::Icon<'static>>,
+        thumb: &[u8],
+    ) -> Option<Image<'static>> {
+        base.as_ref().map(|icon| {
+            let (w, h) = (icon.width, icon.height);
+            Image::new_owned(compose(&icon.rgba, w as usize, h as usize, thumb), w, h)
+        })
+    }
+
     let run = move || {
-        let default = app.default_window_icon().cloned();
+        let default = app.default_window_icon().cloned().map(Image::to_owned);
         // The icon at the sizes it's shown at: small in the tray and title,
         // big in the taskbar.
         #[cfg(windows)]
-        let [small, big] = windows_icon::sizes().map(|s| Image::from_app_icon_resource(s).ok());
+        let [small, big] = windows_icon::sizes()
+            .map(|s| Image::from_app_icon_resource(s).ok().map(Image::to_owned));
         #[cfg(not(windows))]
         let [small, big] = [default.clone(), default.clone()];
-        let on = |base: &Option<Image<'static>>, thumb: &[u8]| {
-            base.as_ref().map(|b| {
-                let (w, h) = (b.width(), b.height());
-                Image::new_owned(compose(b.rgba(), w as usize, h as usize, thumb), w, h)
-            })
-        };
+        let small = small.map(Into::<tauri_runtime::Icon<'static>>::into);
+        let big = big.map(Into::<tauri_runtime::Icon<'static>>::into);
         #[cfg(windows)]
         let mut window_icon = windows_icon::WindowIcon::default();
         let mut seq = 0;
         loop {
             let (s, thumb) = latest.wait(seq);
             seq = s;
-            let icons = thumb.as_deref().map(|t| [on(&small, t), on(&big, t)]);
+            let icons = thumb
+                .as_deref()
+                .map(|t| [overlay(&small, t), overlay(&big, t)]);
             let [small, big] = icons.unwrap_or_default();
             if let Some(tray) = app.tray_by_id("main") {
                 let _ = tray.set_icon(small.clone().or_else(|| default.clone()));

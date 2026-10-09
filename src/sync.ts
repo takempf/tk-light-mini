@@ -42,7 +42,7 @@ export function startSync(): () => void {
       const paths = mergePaths(prev, msg.paths);
       if (paths !== prev) useLive.setState({ paths });
     }
-    if (msg.image) useScreen.setState({ image: msg.image });
+    if ("image" in msg) useScreen.setState({ image: msg.image ?? null });
   };
 
   let visible = false;

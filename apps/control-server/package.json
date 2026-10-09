@@ -1,0 +1,21 @@
+{
+  "name": "@tk-light/control-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.3",
+    "tsx": "^4.20.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.1"
+  }
+}

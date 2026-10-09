@@ -1,0 +1,45 @@
+.admin-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 1rem;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border, #444);
+}
+.admin-header strong {
+  margin-right: auto;
+}
+.admin-header label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.admin-header form {
+  display: flex;
+  gap: 0.4rem;
+}
+.admin-header select,
+.admin-header button,
+.admin-login input,
+.admin-login button {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+}
+.admin-login {
+  width: min(420px, 90vw);
+  margin: 20vh auto;
+  display: grid;
+  gap: 1rem;
+}
+.admin-login form {
+  display: flex;
+  gap: 0.5rem;
+}
+.admin-login input {
+  flex: 1;
+  min-width: 0;
+}
+.admin-header form input {
+  width: 8rem;
+}

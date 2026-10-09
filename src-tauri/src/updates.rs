@@ -147,6 +147,8 @@ mod tests {
             .unwrap();
         let updater = app
             .updater_builder()
+            // The signed fixture is a Windows release, even when tests run on macOS.
+            .target("windows-x86_64")
             .endpoints(vec![feed.parse().unwrap()])
             .unwrap()
             .build()

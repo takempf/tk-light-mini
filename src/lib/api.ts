@@ -2,11 +2,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { availableMonitors, getCurrentWindow } from "@tauri-apps/api/window";
+import { browserApi } from "./browserApi";
 import { decodePreview, type Preview } from "./preview";
 import type { EngineConfig, GoveeDevice, MonitorInfo, UpdateInfo } from "./types";
 
 /** Thin wrapper over Tauri IPC, so tests can mock one module. */
-export const api = {
+const desktopApi = {
   discoverDevices: () => invoke<GoveeDevice[]>("discover_devices"),
   listMonitors: () => invoke<MonitorInfo[]>("list_monitors"),
   setConfig: (config: EngineConfig) => invoke<void>("set_config", { config }),
@@ -66,3 +67,5 @@ export const api = {
     };
   },
 };
+
+export const api: typeof desktopApi = import.meta.env.VITE_ADMIN === "1" ? browserApi : desktopApi;

@@ -47,5 +47,6 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
+    exclude: ["apps/**", "packages/**", "node_modules/**"],
   },
 });

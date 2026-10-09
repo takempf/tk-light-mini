@@ -1,0 +1,9 @@
+{
+  "name": "@tk-light/light-core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./path": "./src/path.ts",
+    "./types": "./src/types.ts"
+  }
+}

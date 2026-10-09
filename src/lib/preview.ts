@@ -12,7 +12,7 @@ export interface Preview {
   seq: number;
   status?: EngineStatus;
   paths?: LightColors[];
-  image?: ScreenImage;
+  image?: ScreenImage | null;
 }
 
 const STATUS = 1;

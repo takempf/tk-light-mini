@@ -21,6 +21,7 @@ import type {
   EngineStatus,
   GoveeDevice,
   Hex,
+  LightFrameSource,
   LightPath,
   MonitorInfo,
   Rgb,
@@ -97,6 +98,8 @@ interface AppState {
   setSegments: (id: string, segments: number) => void;
   /** Color a whole section. Clears its segment overrides. */
   setSectionColor: (id: string, section: number, color: Source) => void;
+  setDeviceFrameSource: (id: string, source?: LightFrameSource) => void;
+  setSectionFrameSource: (id: string, section: number, source?: LightFrameSource) => void;
   /** Override single segments, or clear them with null. */
   setSegmentColors: (id: string, segments: readonly number[], color: Source | null) => void;
   /** Place a section, or clear its path with undefined. */
@@ -118,6 +121,7 @@ interface AppState {
   setFps: (fps: number) => void;
   setMonitor: (index: number) => void;
   setCanvas: (canvas: CanvasSource) => void;
+  setSenderId: (senderId: string) => void;
   setTuning: (t: Partial<Tuning>) => void;
   resetTuning: () => void;
   /** Undo or redo the last layout or color edit. */
@@ -363,6 +367,11 @@ export const useStore = create<AppState>()(
             };
           });
         },
+        setDeviceFrameSource: (id, source) => edit(id, (d) => ({ ...d, source })),
+        setSectionFrameSource: (id, section, source) =>
+          editSections(id, (sections) =>
+            sections.map((s, k) => (k === section ? { ...s, source } : s)),
+          ),
         setSegmentColors: (id, segments, color) => {
           record();
           edit(id, (d) => {
@@ -427,6 +436,7 @@ export const useStore = create<AppState>()(
         setFps: (fps) => set((s) => ({ settings: { ...s.settings, fps } })),
         setMonitor: (monitor) => set((s) => ({ settings: { ...s.settings, monitor } })),
         setCanvas: (canvas) => set((s) => ({ settings: { ...s.settings, canvas } })),
+        setSenderId: (senderId) => set((s) => ({ settings: { ...s.settings, senderId } })),
         setTuning: (t) =>
           set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
         resetTuning: () =>
@@ -494,6 +504,7 @@ export const useStore = create<AppState>()(
           lastKey = null;
           set({
             devices,
+            enabled: import.meta.env.VITE_ADMIN === "1" ? false : get().enabled,
             settings: {
               ...DEFAULT_SETTINGS,
               ...settings,
