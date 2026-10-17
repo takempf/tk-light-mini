@@ -1,4 +1,4 @@
-//! Capture -> extract -> smooth -> send loop, on its own low-priority thread.
+//! Capture -> extract -> smooth -> send loop, on its own thread.
 
 use parking_lot::Mutex;
 use serde::de::Error as _;
@@ -126,7 +126,8 @@ const KEEPALIVE: Duration = Duration::from_secs(1);
 /// where color commands alone don't wake it.
 const POWER_RETRY: Duration = Duration::from_secs(1);
 const POWER_KEEPALIVE: Duration = Duration::from_secs(10);
-/// Quick resends before settling into the keepalive.
+/// Quick resends before settling into the keepalive. Streaming lights stop
+/// after these: the first packets after startup are the likeliest to be lost.
 const POWER_TRIES: u8 = 3;
 /// Skip sends when no channel moved more than this.
 const MIN_DELTA: u8 = 2;
@@ -299,14 +300,13 @@ struct Section {
 
 impl Target {
     /// Time to send "on": right away, a few quick retries, then now and then.
-    /// Streaming lights get it once, before the stream starts.
+    /// Streaming lights only get the quick retries.
     fn power_due(&self, now: Instant) -> bool {
         let Some(at) = self.power_at else { return true };
-        if self.razer {
-            return false;
-        }
         let wait = if self.power_tries < POWER_TRIES {
             POWER_RETRY
+        } else if self.razer {
+            return false;
         } else {
             POWER_KEEPALIVE
         };
@@ -442,18 +442,36 @@ fn segment_output(t: &Target, out: &mut Vec<Rgb>) {
     );
 }
 
+/// Keep the loop on time while a game has the foreground. The thread mostly
+/// sleeps, so a higher priority costs the game nothing; below normal, a game
+/// busy on every core delays its wakeups. And Windows 11 slows (EcoQoS) the
+/// threads of apps in the background unless they opt out.
 #[cfg(windows)]
-fn lower_thread_priority() {
+fn tune_thread() {
     use windows::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+        GetCurrentThread, SetThreadInformation, SetThreadPriority, ThreadPowerThrottling,
+        THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_ABOVE_NORMAL,
     };
     unsafe {
-        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+        // Control the flag, with it off: never throttle.
+        let state = THREAD_POWER_THROTTLING_STATE {
+            Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+            StateMask: 0,
+        };
+        let _ = SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&raw const state).cast(),
+            std::mem::size_of_val(&state) as u32,
+        );
     }
 }
 
 #[cfg(not(windows))]
-fn lower_thread_priority() {}
+fn tune_thread() {}
 
 /// The latest frame, captured or painted, tightly packed. Paths and the screen
 /// image both read it, and paths can be resampled from it after an edit even
@@ -488,7 +506,7 @@ impl FrameCache {
 }
 
 fn run(shared: Arc<Shared>) {
-    lower_thread_priority();
+    tune_thread();
     let emit_status =
         |error: Option<String>| shared.preview.set_status(error.is_none(), error.as_deref());
 
@@ -667,6 +685,8 @@ fn run(shared: Arc<Shared>) {
                 sender.turn(addr, true);
                 t.power_at = Some(tick);
                 t.power_tries = t.power_tries.saturating_add(1);
+                // Start the stream again too: it may have been lost as well.
+                t.streaming = false;
             }
             if t.razer {
                 if !t.streaming {
@@ -1016,13 +1036,19 @@ mod tests {
     }
 
     #[test]
-    fn streaming_lights_get_on_once() {
+    fn streaming_lights_get_quick_retries_only() {
         let mut t = build_targets(&razer_cfg(true), &mut []).remove(0);
         let t0 = Instant::now();
-        assert!(t.power_due(t0));
-        t.power_at = Some(t0);
-        t.power_tries = 1;
-        assert!(!t.power_due(t0 + Duration::from_secs(60)));
+        let mut sends = 0;
+        for ms in (0..60_000).step_by(100) {
+            let now = t0 + Duration::from_millis(ms);
+            if t.power_due(now) {
+                t.power_at = Some(now);
+                t.power_tries += 1;
+                sends += 1;
+            }
+        }
+        assert_eq!(sends, POWER_TRIES);
     }
 
     #[test]

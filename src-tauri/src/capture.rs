@@ -289,10 +289,9 @@ mod win {
             let device = device.ok_or_else(|| CaptureError::Other("no d3d device".into()))?;
             let ctx = ctx.ok_or_else(|| CaptureError::Other("no d3d context".into()))?;
 
-            // Yield to the game on the GPU. Negative = lower priority.
-            if let Ok(dxgi) = device.cast::<IDXGIDevice>() {
-                let _ = unsafe { dxgi.SetGPUThreadPriority(-7) };
-            }
+            // Normal GPU priority: at the lowest, a game keeping the GPU busy
+            // starves our copy for frames on end, and the lights stutter. The
+            // work is one copy and a mip chain per frame.
 
             // Ask for 8-bit, so Windows tone maps an HDR desktop. That needs
             // Windows 10 1703+ and a DPI-aware process (the app is; tests
@@ -412,14 +411,31 @@ mod win {
         /// Returns `Some(f(frame))` when a new frame was read.
         pub fn poll<R>(&mut self, f: impl FnOnce(&Frame) -> R) -> Result<Option<R>, CaptureError> {
             let mut result = None;
-            if let Some(s) = self.pending.take().and_then(|i| self.scalers.get(i)) {
+            if let Some((i, s)) = self
+                .pending
+                .take()
+                .and_then(|i| Some((i, self.scalers.get(i)?)))
+            {
                 let (w, h) = (s.small_w as usize, s.small_h as usize);
                 let bytes = if s.format == HDR { 8 } else { 4 };
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 unsafe {
-                    self.ctx
-                        .Map(&s.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                        .map_err(err)?;
+                    // Never wait on the GPU: a busy one would stall the loop.
+                    // Try again next tick, and leave new frames till then.
+                    match self.ctx.Map(
+                        &s.staging,
+                        0,
+                        D3D11_MAP_READ,
+                        D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                        Some(&mut mapped),
+                    ) {
+                        Ok(()) => {}
+                        Err(e) if e.code() == DXGI_ERROR_WAS_STILL_DRAWING => {
+                            self.pending = Some(i);
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(err(e)),
+                    }
                     let stride = mapped.RowPitch as usize;
                     let len = stride * (h - 1) + w * bytes;
                     let data = std::slice::from_raw_parts(mapped.pData as *const u8, len);
