@@ -164,3 +164,29 @@ it("previews the source selected for a light or its section", () => {
     Buffer.from([0, 0, 255]),
   );
 });
+
+it("samples colors for the editor while sync is off without sending them", () => {
+  const sent: string[] = [];
+  const engine = new LightEngine(new FrameRegistry(), {
+    turn(ip) {
+      sent.push(`turn ${ip}`);
+    },
+    color(ip) {
+      sent.push(`color ${ip}`);
+    },
+    razer(ip) {
+      sent.push(`razer ${ip}`);
+    },
+  });
+  const setup: Setup = {
+    ...structuredClone(DEFAULT_SETUP),
+    source: { kind: "color", color: "#ff0000" },
+    devices: [light("one", "192.168.1.2"), { ...light("two", "192.168.1.3"), on: false }],
+  };
+  engine.tick(setup, 1000);
+  expect(engine.live.get("192.168.1.2")).toEqual([[255, 0, 0]]);
+  expect(engine.live.has("192.168.1.3")).toBe(false);
+  expect(sent).toEqual([]);
+  engine.tick({ ...setup, enabled: true }, 1100);
+  expect(sent).toContain("color 192.168.1.2");
+});

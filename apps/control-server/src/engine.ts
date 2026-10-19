@@ -142,18 +142,18 @@ export class LightEngine {
     this.live.clear();
     const calibration = this.calibration && this.calibration.until > now ? this.calibration : null;
     for (const device of setup.devices) {
-      if (
-        (!device.on && calibration?.id !== device.id) ||
-        (!setup.enabled && (!calibration || calibration.id !== device.id))
-      )
-        continue;
-      current.add(device.id);
+      const calibrating = calibration?.id === device.id;
+      if (!device.on && !calibrating) continue;
       const pathColors = calibration
         ? Array.from({ length: Math.max(1, device.razer ? (device.segments ?? 15) : 1) }, () =>
             device.id === calibration.id ? calibration.color : ([0, 0, 0] as Rgb),
           )
         : this.pathColors(device, setup, now);
+      // As in the original app, the editor shows sampled colors while lights are placed with
+      // sync off; only sending waits for sync.
       this.live.set(device.ip, pathColors);
+      if (!setup.enabled && !calibrating) continue;
+      current.add(device.id);
       const sources = this.segmentSources(device);
       const target = calibration
         ? sources.map(() => (device.id === calibration.id ? calibration.color : ([0, 0, 0] as Rgb)))
