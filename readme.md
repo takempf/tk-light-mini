@@ -32,7 +32,13 @@ The sender publishes downscaled frames to the server. The server alone sends Gov
 
 To move an existing setup, export it from the original desktop app, stop its syncing, then import the file in the browser admin panel. Review the lights before enabling server syncing. The original controller's release process remains documented below for existing installations.
 
-For development, run `pnpm --filter @tk-light/control-server dev` and `pnpm --filter @tk-light/admin-web dev` in separate shells. The admin dev server proxies `/api` to port 8787. Run `pnpm check` for frontend, server, and Rust checks. Tests that bind a local port or use real lights may need host permissions.
+For development on this computer, run `pnpm install` once, then use one command from the repository root:
+
+```sh
+pnpm dev:control
+```
+
+This starts the Node server and admin panel with live reload. Open `http://127.0.0.1:1422`. The first run creates `apps/control-server/server.env.local` with distinct admin and sender tokens; later runs reuse it. Startup prints the tokens and the LAN URL to enter in the Windows screen sender. The credentials file is ignored by Git. For the server with its built admin panel on port 8787, use `pnpm dev:server`. Stop either script with Ctrl-C. `pnpm dev` still starts the original desktop controller's frontend. Run `pnpm check` for frontend, server, and Rust checks. Tests that bind a local port or use real lights may need host permissions.
 
 ### Run as a service
 
