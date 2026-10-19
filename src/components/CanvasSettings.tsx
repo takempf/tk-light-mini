@@ -1,5 +1,6 @@
 import { bands, CANVASES, canvasOption } from "../lib/canvases";
 import type { Tuning } from "../lib/types";
+import { useSenders } from "../lib/useSenders";
 import { useStore } from "../store";
 import { Button, Select } from "../ui";
 import { pct, Slider } from "./Slider";
@@ -9,6 +10,29 @@ const TUNING: { key: keyof Tuning; label: string; min: number; max: number; step
   { key: "saturation", label: "Saturation", min: 0.5, max: 2, step: 0.05 },
   { key: "smoothing", label: "Smoothing", min: 0, max: 1, step: 0.05 },
 ];
+
+/** In the admin panel, which computer's screen the screen canvases follow. */
+function ScreenSenderSelect() {
+  const senders = useSenders();
+  const senderId = useStore((s) => s.settings.senderId ?? null);
+  const setSenderId = useStore((s) => s.setSenderId);
+  const items = senders.map((sender) => ({
+    value: sender.id,
+    label: `${sender.name} ${sender.online ? "●" : "(offline)"}`,
+  }));
+  if (senderId && !senders.some((sender) => sender.id === senderId))
+    items.unshift({ value: senderId, label: `${senderId} (offline)` });
+  return (
+    <Select
+      aria-label="Screen sender"
+      size="sm"
+      placeholder={items.length ? "Choose a screen sender" : "No screen senders connected"}
+      value={senderId}
+      onValueChange={(v) => v !== null && setSenderId(v)}
+      items={items}
+    />
+  );
+}
 
 /** What the lights follow, which screen, and how its colors are picked. */
 export function CanvasSettings() {
@@ -40,6 +64,9 @@ export function CanvasSettings() {
           </button>
         ))}
       </fieldset>
+      {import.meta.env.VITE_ADMIN === "1" && canvasOption(settings.canvas).screen && (
+        <ScreenSenderSelect />
+      )}
       {canvasOption(settings.canvas).screen && monitors.length > 1 && (
         <Select
           aria-label="Monitor"

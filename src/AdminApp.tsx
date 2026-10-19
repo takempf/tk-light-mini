@@ -3,7 +3,7 @@ import { startAdminSession } from "./adminSync";
 import { Calibrator } from "./components/Calibrator";
 import { Canvas } from "./components/Canvas";
 import { Sidebar } from "./components/Sidebar";
-import { browserApi, type SenderStatus } from "./lib/browserApi";
+import { browserApi } from "./lib/browserApi";
 import { useStore } from "./store";
 import "./App.css";
 
@@ -12,30 +12,16 @@ export default function AdminApp() {
   const [draft, setDraft] = useState(token);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
-  const [senders, setSenders] = useState<SenderStatus[]>([]);
   const [probeIp, setProbeIp] = useState("");
   const enabled = useStore((s) => s.enabled);
   const setEnabled = useStore((s) => s.setEnabled);
   const canvas = useStore((s) => s.settings.canvas);
   const senderId = useStore((s) => s.settings.senderId ?? "");
-  const setSenderId = useStore((s) => s.setSenderId);
   const addDevice = useStore((s) => s.addDevice);
 
   useEffect(() => {
     if (!token) return;
-    const stop = startAdminSession(setError, () => setReady(true));
-    const poll = () => {
-      void browserApi
-        .getStatus()
-        .then((status) => setSenders(status.senders))
-        .catch(() => {});
-    };
-    poll();
-    const interval = setInterval(poll, 1000);
-    return () => {
-      stop();
-      clearInterval(interval);
-    };
+    return startAdminSession(setError, () => setReady(true));
   }, [token]);
 
   if (!token)
@@ -67,20 +53,6 @@ export default function AdminApp() {
         <strong>Light control</strong>
         {ready && (
           <>
-            <label>
-              Screen sender
-              <select value={senderId} onChange={(event) => setSenderId(event.target.value)}>
-                <option value="">Choose sender</option>
-                {senderId && !senders.some((sender) => sender.id === senderId) && (
-                  <option value={senderId}>{senderId} (offline)</option>
-                )}
-                {senders.map((sender) => (
-                  <option key={sender.id} value={sender.id}>
-                    {sender.name} {sender.online ? "●" : "(offline)"}
-                  </option>
-                ))}
-              </select>
-            </label>
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -134,7 +106,7 @@ export default function AdminApp() {
       {ready && (
         <>
           {(canvas === "screen" || canvas === "phthalo") && !senderId && (
-            <div className="banner">Choose a screen sender to use this canvas.</div>
+            <div className="banner">Choose a screen sender under Canvas to use this canvas.</div>
           )}
           <div className="content">
             <main className="layout">

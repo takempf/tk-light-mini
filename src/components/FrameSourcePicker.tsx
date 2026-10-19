@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { browserApi, type SenderStatus } from "../lib/browserApi";
 import type { LightFrameSource } from "../lib/types";
+import { useSenders } from "../lib/useSenders";
 
 const SCENES = ["forest", "sunset", "aurora", "sea", "lava", "fire"] as const;
 
@@ -13,18 +12,7 @@ export function FrameSourcePicker({
   onChange: (value?: LightFrameSource) => void;
   label: string;
 }) {
-  const [senders, setSenders] = useState<SenderStatus[]>([]);
-  useEffect(() => {
-    const poll = () => {
-      void browserApi
-        .getStatus()
-        .then((status) => setSenders(status.senders))
-        .catch(() => {});
-    };
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => clearInterval(timer);
-  }, []);
+  const senders = useSenders();
   const selected = !value
     ? "room"
     : value.kind === "remote"
