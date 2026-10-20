@@ -217,6 +217,8 @@ export class LightEngine {
         !old || (!device.razer && now - old.power >= (old.powerTries < 3 ? 1000 : 10000));
       if (powerDue) this.output.turn(device.ip, true);
       if (device.razer) {
+        // Once per stream: asking again restarts the light's razer mode, and it
+        // blinks instead of following the stream.
         if (!old?.streaming) this.output.razer(device.ip, true);
         this.output.razer(device.ip, output);
       } else {

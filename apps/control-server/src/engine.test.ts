@@ -192,6 +192,29 @@ it("samples colors for the editor while sync is off without sending them", () =>
   expect(sent).toContain("color 192.168.1.2");
 });
 
+it("asks for razer mode once per stream, since asking again restarts it", () => {
+  const modes: number[] = [];
+  let streamed = 0;
+  const engine = new LightEngine(new FrameRegistry(), {
+    turn() {},
+    color() {},
+    razer(_ip, value) {
+      if (value === true) modes.push(now);
+      else if (Array.isArray(value)) streamed++;
+    },
+  });
+  const setup: Setup = {
+    ...structuredClone(DEFAULT_SETUP),
+    enabled: true,
+    source: { kind: "color", color: "#ff0000" },
+    devices: [{ ...light("one", "192.168.1.2"), razer: true, segments: 3 }],
+  };
+  let now = 1000;
+  for (; now < 6000; now += 100) engine.tick(setup, now);
+  expect(modes).toEqual([1000]);
+  expect(streamed).toBe(50);
+});
+
 it("samples a scene whole, though its dark ground looks like a letterbox bar", () => {
   const engine = new LightEngine(new FrameRegistry(), { turn() {}, color() {}, razer() {} });
   const path = {
