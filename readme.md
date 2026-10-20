@@ -83,8 +83,9 @@ The big canvas shows every light as a band over a live copy of your screen (or t
 - **Exact spots:** with one point picked, type its X and Y. On a loop, **Start here** makes it the first point.
 - **Draw from scratch:** **Draw**, then click out the points. **Backspace** takes back the last one, and clicking the first point closes the loop. Double-click, **Enter** or **Done drawing** finishes.
 - **Presets:** **Edge loop** goes all the way around the screen. **Line** is a short line to drag into place. **Flip** mirrors a path across the middle, handy for a pair of bars.
+- **Where an edge loop starts and ends:** drag its start (the big point) along the edge to where the strip starts. It snaps to the corners and the middle of each side (**Alt** turns that off), and with it picked, the arrow keys nudge it along. To leave a gap, say behind a TV stand, turn off **Closed loop**: the end point shows up where the loop used to close, and drags the same way. Drag the end back onto the start to close the gap. Moving any other point makes it an ordinary path.
 - **Thickness** sets how wide a band of the picture the light looks at, in `vh`: 40vh is 40% of the screen's height, edge to edge. An open band's ends are cut square, and the light looks only inside the band as drawn.
-- **Horizontal** and **Vertical** set how a path sizes to the screen on each axis. **Exact** keeps it where its points are. **Fit** stretches it to fill the screen, with the band's edges flush against the screen's edges. **Auto** scales it along with the other axis (when that one is on Fit), so the shape keeps its proportions, even on a screen of another shape. **Edge loop** fits both ways.
+- **Horizontal** and **Vertical** set how a path sizes to the screen on each axis. **Exact** keeps it where its points are. **Fit** stretches it to fill the screen, with the band's edges flush against the screen's edges. **Auto** scales it along with the other axis (when that one is on Fit), so the shape keeps its proportions, even on a screen of another shape. An edge loop always sits just inside the screen's edges, so it doesn't have these.
 - Points snap to other points and to the screen's edges and middle, with a guide line. A band's edges snap too, so it can sit flush inside the screen's edge or right against another band. Hold **Shift** while dragging a single point to keep its line at 0, 45 or 90 degrees, and **Alt** to turn snapping off.
 - **Undo** and **Redo** (**Ctrl+Z**, **Ctrl+Shift+Z**) cover placement, sections and colors. **Shortcuts** above the screen lists all of these.
 
@@ -242,7 +243,7 @@ Open a light and click **Draw path**. You get the screen as the app sees it (abo
 
 - Click to add points, starting where the strip starts. Drag a point to move it. Right-click it, or select it and press Delete, to remove it.
 - **Thickness** sets how wide a band along the line is sampled.
-- **Edge loop** draws a loop around the screen edge, starting at the bottom right and going up. **Reverse** flips the direction, and **Closed loop** joins the end back to the start.
+- **Edge loop** draws a loop around the screen edge, starting at the bottom right and going up. Drag its start and end along the edge to move them. **Reverse** flips the direction, and **Closed loop** joins the end back to the start, all the way round.
 
 The band is split along its length into one piece per segment, numbered from the start, each shown in its live color. A new path switches the light to the **Canvas** color, so segment 1 shows piece 1, and so on. You can still set single segments to other colors. Without razer streaming, the whole path is one color for the whole light.
 

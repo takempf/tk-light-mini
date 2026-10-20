@@ -123,7 +123,15 @@ export function validateSetup(value: unknown): Setup {
           (section.path.fit !== undefined &&
             ![section.path.fit.x, section.path.fit.y].every((axis) =>
               ["exact", "fit", "auto"].includes(axis),
-            )))
+            )) ||
+          (section.path.edge !== undefined &&
+            (typeof section.path.edge !== "object" ||
+              section.path.edge === null ||
+              ![section.path.edge.start, section.path.edge.end].every(
+                (t) => Number.isFinite(t) && t >= 0 && t < 4,
+              ) ||
+              (section.path.edge.reverse !== undefined &&
+                typeof section.path.edge.reverse !== "boolean"))))
       )
         throw new Error("Invalid path");
     }

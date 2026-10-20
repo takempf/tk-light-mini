@@ -43,3 +43,33 @@ it("validates setup and persists revisions atomically", async () => {
     }),
   ).toThrow("Invalid section");
 });
+
+it("accepts edge loop ends around the screen, and nothing past them", () => {
+  const withEdge = (edge: unknown) => ({
+    ...DEFAULT_SETUP,
+    devices: [
+      {
+        id: "a",
+        ip: "192.168.1.2",
+        name: "a",
+        sku: "x",
+        on: true,
+        razer: false,
+        brightness: 1,
+        sections: [
+          {
+            count: 1,
+            color: "path",
+            path: { points: [[0.5, 0.5]], width: 0.1, closed: false, edge },
+          },
+        ],
+      },
+    ],
+  });
+  expect(() => validateSetup(withEdge({ start: 3.5, end: 0, reverse: true }))).not.toThrow();
+  expect(() => validateSetup(withEdge({ start: 4, end: 0 }))).toThrow("Invalid path");
+  expect(() => validateSetup(withEdge({ start: 0, end: 0, reverse: "yes" }))).toThrow(
+    "Invalid path",
+  );
+  expect(() => validateSetup(withEdge(null))).toThrow("Invalid path");
+});

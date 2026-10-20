@@ -721,6 +721,70 @@ describe("Canvas", () => {
     expect(points()?.[0]?.[0]).toBeCloseTo(0.25);
   });
 
+  it("slides an edge loop's start and end along the edge", async () => {
+    useStore.setState({ devices: [light({ name: "Strip" })] });
+    const user = userEvent.setup();
+    const { container } = render(<App />);
+    await user.click(screen.getByRole("button", { name: "Section 1 (1)" }));
+    await user.click(screen.getByRole("button", { name: "Edge loop" }));
+    const svg = layout();
+    const path = () => useStore.getState().devices[0]?.sections[0]?.path;
+    const detail = (label: string) =>
+      screen.getByText(label, { selector: ".tk-range-label" }).nextElementSibling?.textContent;
+    expect(detail("Start")).toBe("Bottom right corner");
+    expect(detail("End")).toBe("Back at the start");
+    expect(screen.queryByRole("button", { name: "Horizontal: Fit" })).toBeNull();
+
+    // The start slides along the edge, and snaps to the bottom's middle.
+    fireEvent.pointerDown(handle("Point 1, start"), { button: 0 });
+    fireEvent.pointerMove(svg, { clientX: 103, clientY: 97 });
+    expect(container.querySelector(".guide")).not.toBeNull();
+    fireEvent.pointerUp(svg);
+    expect(path()?.edge).toEqual({ start: 3.5, end: 3.5 });
+    expect(path()?.points[0]?.[0]).toBeCloseTo(0.5);
+    expect(path()?.points[0]?.[1]).toBeCloseTo(0.94);
+    expect(path()?.points).toHaveLength(5);
+    expect(detail("Start")).toBe("Bottom edge, 50% across");
+
+    // Open, it ends a leg early: at the bottom left, reaching the screen's edge.
+    fireEvent.click(screen.getByRole("switch", { name: "Closed loop" }));
+    expect(path()?.closed).toBe(false);
+    expect(path()?.points.at(-1)).toEqual([0.03, 1]);
+    expect(detail("End")).toBe("Bottom left corner");
+    fireEvent.pointerDown(handle("Point 5"), { button: 0 });
+    fireEvent.pointerMove(svg, { clientX: 50, clientY: 95 });
+    expect(path()?.points).toHaveLength(6);
+    expect(picked()).toEqual([5]);
+    expect(detail("End")).toBe("Bottom edge, 25% across");
+    expect(lastDevice()?.sections[0]?.path?.closed).toBe(false);
+    // Running into the start closes the gap.
+    fireEvent.pointerMove(svg, { clientX: 120, clientY: 95 });
+    fireEvent.pointerUp(svg);
+    expect(path()?.edge).toEqual({ start: 3.5, end: 3.5 });
+    expect(path()?.closed).toBe(true);
+    expect(picked()).toEqual([0]);
+
+    // Arrows nudge the start along the edge too.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(path()?.points[0]?.[0]).toBeCloseTo(0.505);
+    expect(path()?.edge?.end).toBe(path()?.edge?.start);
+
+    // Dragging the band leaves it at the edge.
+    const before = path();
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 6 });
+    fireEvent.pointerMove(svg, { clientX: 120, clientY: 30 });
+    fireEvent.pointerUp(svg);
+    expect(path()).toEqual(before);
+
+    // Moving a corner makes it an ordinary path.
+    fireEvent.pointerDown(handle("Point 3"), { button: 0 });
+    fireEvent.pointerMove(svg, { clientX: 180, clientY: 20, altKey: true });
+    fireEvent.pointerUp(svg);
+    expect(path()?.edge).toBeUndefined();
+    expect(path()?.points[2]).toEqual([0.9, 0.2]);
+    expect(screen.getByText("5 points")).toBeInTheDocument();
+  });
+
   it("zooms at the pointer, pans, and fits", () => {
     selected(square);
     const { container } = render(<App />);

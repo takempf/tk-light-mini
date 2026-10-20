@@ -4,21 +4,27 @@ import {
   bandRegions,
   directionMarks,
   distanceTo,
+  edgeAt,
   edgeLoop,
+  edgeStops,
   flipPath,
   insertIndex,
   labelPoint,
+  linePath,
+  moveEdge,
   movePath,
   movePoints,
   pointsIn,
   removePoints,
   resolvePath,
   reversePath,
+  setClosed,
   splitPath,
   startAt,
   unresolvePath,
   zonePath,
 } from "./path";
+import type { LightPath } from "./types";
 
 describe("section direction marks", () => {
   it("spaces tailed equilateral arrows along long paths and alternates sides", () => {
@@ -177,11 +183,99 @@ describe("splitPath", () => {
 });
 
 describe("edgeLoop", () => {
+  // On a 2:1 screen, 0.2 thick: corners at x 0.05 and 0.95, y 0.1 and 0.9.
+  const round = (p: LightPath) => p.points.map((q) => q.map((v) => Math.round(v * 1000) / 1000));
+
   it("runs up the right side from the bottom right, inset by half the width", () => {
     const p = edgeLoop(2, 0.2);
     expect(p.closed).toBe(true);
     expect(p.points[0]).toEqual([0.95, 0.9]);
     expect(p.points[1]).toEqual([0.95, 0.1]);
+  });
+
+  it("stops at its start, the corners it turns, and its end", () => {
+    expect(edgeStops({ start: 0, end: 0 })).toEqual([0, 1, 2, 3]);
+    expect(edgeStops({ start: 0, end: 0, reverse: true })).toEqual([0, 3, 2, 1]);
+    expect(edgeStops({ start: 3.5, end: 3.5 })).toEqual([3.5, 0, 1, 2, 3]);
+    expect(edgeStops({ start: 0, end: 3 })).toEqual([0, 1, 2, 3]);
+    expect(edgeStops({ start: 0.5, end: 0.25 })).toEqual([0.5, 1, 2, 3, 0, 0.25]);
+  });
+
+  it("starts anywhere, and leaves a gap when its end is elsewhere", () => {
+    expect(round(edgeLoop(2, 0.2, { start: 3.5, end: 3.5 }))).toEqual([
+      [0.5, 0.9],
+      [0.95, 0.9],
+      [0.95, 0.1],
+      [0.05, 0.1],
+      [0.05, 0.9],
+    ]);
+    const open = edgeLoop(2, 0.2, { start: 0.5, end: 2.5 });
+    expect(open.closed).toBe(false);
+    expect(round(open)).toEqual([
+      [0.95, 0.5],
+      [0.95, 0.1],
+      [0.05, 0.1],
+      [0.05, 0.5],
+    ]);
+  });
+
+  it("reaches on to the screen's edge from an end at a corner", () => {
+    const p = edgeLoop(2, 0.2, { start: 0, end: 3 });
+    expect(p.points[0]).toEqual([0.95, 1]);
+    expect(p.points[3]).toEqual([0.05, 1]);
+  });
+
+  it("finds the place nearest a spot, snapping to corners, middles and marks", () => {
+    expect(edgeAt([1, 0.3], 2, 0.2)).toBeCloseTo(0.75);
+    expect(edgeAt([0.52, 0.95], 2, 0.2)).toBeCloseTo(3.522);
+    expect(edgeAt([0.52, 0.95], 2, 0.2, 0.05)).toBe(3.5);
+    expect(edgeAt([0.9, 0.12], 2, 0.2, 0.05)).toBeCloseTo(1.056);
+    expect(edgeAt([0.9, 0.12], 2, 0.2, 0.05, [1.05])).toBe(1.05);
+  });
+
+  it("moves an end, closing the loop when it runs into the other", () => {
+    expect(moveEdge({ start: 0, end: 0 }, "start", 1.5, true)).toEqual({ start: 1.5, end: 1.5 });
+    expect(moveEdge({ start: 0, end: 3 }, "end", 3.2, false)).toEqual({ start: 0, end: 3.2 });
+    // Past the start from nearly all the way round: closed.
+    expect(moveEdge({ start: 0, end: 3.9 }, "end", 0.1, false)).toEqual({ start: 0, end: 0 });
+    expect(moveEdge({ start: 0.2, end: 0 }, "start", 3.9, false)).toEqual({ start: 0, end: 0 });
+    // From a sliver, it stops instead of wrapping round.
+    expect(moveEdge({ start: 0, end: 0.1 }, "end", 3.9, false)).toEqual({ start: 0, end: 0.1 });
+    // A drag that closed it can open it again.
+    expect(moveEdge({ start: 0, end: 0 }, "end", 3.8, false)).toEqual({ start: 0, end: 3.8 });
+  });
+
+  it("opens at the last leg and closes all the way round", () => {
+    const open = setClosed(edgeLoop(2, 0.2, { start: 3.5, end: 3.5 }), false);
+    expect(open.edge).toEqual({ start: 3.5, end: 3 });
+    expect(resolvePath(open, 2).points.at(-1)).toEqual([0.05, 1]);
+    expect(setClosed(open, true).edge).toEqual({ start: 3.5, end: 3.5 });
+    expect(setClosed(linePath(), true)).toEqual({ ...linePath(), closed: true });
+  });
+
+  it("reverses, flips and restarts by its ends", () => {
+    const p = edgeLoop(2, 0.2, { start: 0.5, end: 3 });
+    const reversed = reversePath(p);
+    expect(reversed.edge).toEqual({ start: 3, end: 0.5, reverse: true });
+    expect(round(resolvePath(reversed, 2))).toEqual(round(p).reverse());
+    const loop = edgeLoop(2, 0.2, { start: 0.5, end: 0.5 });
+    for (const axis of ["x", "y"] as const) {
+      expect(round(resolvePath(flipPath(loop, axis), 2))).toEqual(round(flipPath(loop, axis)));
+    }
+    expect(flipPath(loop, "x").edge).toEqual({ start: 2.5, end: 2.5, reverse: true });
+    const turned = startAt(edgeLoop(2, 0.2, { start: 3.5, end: 3.5 }), 2);
+    expect(turned.edge).toEqual({ start: 1, end: 1 });
+    expect(resolvePath(turned, 2).points).toHaveLength(4);
+    expect(resolvePath(turned, 2).points[0]).toEqual([0.95, 0.1]);
+  });
+
+  it("lays out afresh for the screen, and turns ordinary when reshaped", () => {
+    const saved = { points: [], width: 0.2, closed: true, edge: { start: 0, end: 0 } };
+    const shown = resolvePath(saved, 4);
+    expect(shown.points[0]).toEqual([0.975, 0.9]);
+    const moved = { ...shown, points: shown.points.map(([x, y]): [number, number] => [x, y / 2]) };
+    const plain = unresolvePath(moved, saved, 4);
+    expect(plain).toEqual({ points: moved.points, width: 0.2, closed: true });
   });
 });
 

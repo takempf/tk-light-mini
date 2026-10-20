@@ -20,6 +20,19 @@ import type { FrameSource as LightFrameSource } from "../../protocol/src/index.j
  */
 export type Fit = "exact" | "fit" | "auto";
 
+/**
+ * Where an edge loop starts and ends, as places around the screen's edge: 0 is
+ * the bottom right corner, 1 the top right, 2 the top left and 3 the bottom
+ * left, with fractions along the side between. Both at the same place, it goes
+ * all the way round.
+ */
+export interface EdgeRange {
+  start: number;
+  end: number;
+  /** Runs clockwise. Otherwise counterclockwise, the way the places count. */
+  reverse?: boolean;
+}
+
 /** A line drawn over the screen that a light samples along. */
 export interface LightPath {
   /** Screen fractions (0..1), from where the strip starts. */
@@ -35,6 +48,11 @@ export interface LightPath {
    * keeps the shape's proportions on a screen of another shape.
    */
   aspect?: number;
+  /**
+   * Makes it an edge loop, running just inside the screen's edges. Its points
+   * follow from this and the width, so read them through `resolvePath`.
+   */
+  edge?: EdgeRange;
 }
 
 /**

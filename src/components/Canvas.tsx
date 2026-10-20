@@ -6,7 +6,12 @@ import {
   clampPoint,
   directionMarks,
   distanceTo,
+  edgeAt,
+  edgeNudge,
+  edgeSpan,
+  edgeStops,
   insertIndex,
+  moveEdge,
   movePath,
   movePoints,
   pointsIn,
@@ -17,7 +22,7 @@ import {
   unresolvePath,
 } from "../lib/path";
 import { type Guides, snapMove, snapPoint } from "../lib/snap";
-import type { AddedDevice, LightPath, Source } from "../lib/types";
+import type { AddedDevice, EdgeRange, LightPath, Source } from "../lib/types";
 import { FIT, frameOf, panBy, type View, zoomAt } from "../lib/view";
 import { useScreen, useScreenAspect, useStore } from "../store";
 import { Button, Popover } from "../ui";
@@ -127,6 +132,13 @@ function ScreenImage() {
 }
 
 const line = (pts: readonly Pt[]) => pts.map((p) => p.join(",")).join(" ");
+
+/** Which end of an edge loop point `i` is, if it's one. */
+const edgeEnd = (path: LightPath, i: number): "start" | "end" | undefined => {
+  if (!path.edge) return undefined;
+  if (i === 0) return "start";
+  return !path.closed && i === path.points.length - 1 ? "end" : undefined;
+};
 
 /**
  * A section's segment colors over its band. Only a filled band shows them, so
@@ -240,6 +252,7 @@ const SHORTCUTS: [string, string][] = [
   ["Shift+click a point", "Add it to the picked points, or take it out"],
   ["Drag on empty space", "Pick the points in a box (Shift: add to them)"],
   ["Drag a point", "Move the picked points (Shift: 0/45/90°)"],
+  ["Drag an edge loop's start or end", "Slide it along the edge"],
   ["Double-click the band", "Add a point there"],
   ["Ctrl+click", "Add a point after the last one"],
   ["Delete, right-click", "Remove points"],
@@ -311,6 +324,8 @@ type Drag =
   /** Moving the picked points; `grab` is the one under the pointer. */
   | { kind: "points"; grab: number; indices: number[]; from: Pt; orig: LightPath; saved: LightPath }
   | { kind: "move"; from: Pt; orig: LightPath; saved: LightPath }
+  /** Sliding an edge loop's start or end; a closed loop's move `together`. */
+  | { kind: "edge"; end: "start" | "end"; together: boolean }
   /** Picking points in a box, on top of `base`. */
   | { kind: "box"; from: Pt; to: Pt; base: number[] }
   /** Panning; `from` is in page pixels. */
@@ -390,19 +405,26 @@ export function Canvas() {
     );
   };
 
+  /** Move the edited edge loop's ends, keeping the moved one picked. */
+  const setEdge = (edge: EdgeRange, end: "start" | "end") => {
+    if (!selection || selection.section === null || !current) return;
+    setSectionPath(selection.id, selection.section, { ...current.saved, edge });
+    setPoints([end === "end" && edgeSpan(edge) < 4 ? edgeStops(edge).length - 1 : 0]);
+  };
+
   /** Zoom by `factor` at `at` (viewport pixels), or at the middle. */
   const zoom = (factor: number, at: Pt = [vw / 2, vh / 2]) =>
     setView((v) => zoomAt(v, factor, at, vw, vh, aspect));
 
   // Latest values for the window and wheel handlers.
-  const live = useRef({ editing, picked, drawing, update, w, h, zoom });
-  live.current = { editing, picked, drawing, update, w, h, zoom };
+  const live = useRef({ editing, picked, drawing, update, setEdge, aspect, w, h, zoom });
+  live.current = { editing, picked, drawing, update, setEdge, aspect, w, h, zoom };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Calibration covers the canvas, and has its own keys.
       if (typing(e.target) || useStore.getState().calibrating) return;
-      const { editing, picked, drawing, update, w, h, zoom } = live.current;
+      const { editing, picked, drawing, update, setEdge, aspect, w, h, zoom } = live.current;
       const ctrl = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (e.key === " ") {
@@ -470,7 +492,15 @@ export function Canvas() {
           ArrowUp: [0, -step / h],
           ArrowDown: [0, step / h],
         };
-        update(movePoints(editing, picked, d[e.key] ?? [0, 0]));
+        const delta = d[e.key] ?? [0, 0];
+        // An edge loop's start or end moves along the edge.
+        const end = picked.length === 1 ? edgeEnd(editing, picked[0] as number) : undefined;
+        if (end && editing.edge) {
+          const t = edgeNudge(editing.edge[end], delta, aspect, editing.width);
+          setEdge(moveEdge(editing.edge, end, t, editing.closed), end);
+        } else {
+          update(movePoints(editing, picked, delta));
+        }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -604,7 +634,9 @@ export function Canvas() {
     svg.current?.setPointerCapture(e.pointerId);
     if (target) {
       if (target !== current) select({ id: target.device.id, section: target.section });
-      setDrag({ kind: "move", from: p, orig: target.path, saved: target.saved });
+      // An edge loop stays at the edge.
+      if (!target.saved.edge)
+        setDrag({ kind: "move", from: p, orig: target.path, saved: target.saved });
     } else if (editing) {
       setDrag({ kind: "box", from: p, to: p, base: e.shiftKey ? picked : [] });
     } else {
@@ -629,6 +661,22 @@ export function Canvas() {
       return;
     }
     const p = at(e);
+    if (drag.kind === "edge") {
+      const saved = current?.saved;
+      if (!saved?.edge) return;
+      const other = drag.end === "start" ? saved.edge.end : saved.edge.start;
+      const t = edgeAt(
+        p,
+        aspect,
+        saved.width,
+        e.altKey ? 0 : SNAP / h,
+        drag.together ? [] : [other],
+      );
+      // A side's middle gets a guide, like other snaps to the middle.
+      setGuides(t % 1 === 0.5 ? (Math.floor(t) % 2 === 0 ? { y: 0.5 } : { x: 0.5 }) : {});
+      setEdge(moveEdge(saved.edge, drag.end, t, drag.together), drag.end);
+      return;
+    }
     const delta: Pt = [p[0] - drag.from[0], p[1] - drag.from[1]];
     if (drag.kind === "box") {
       setDrag({ ...drag, to: p });
@@ -710,6 +758,13 @@ export function Canvas() {
       setPoints(picked.includes(i) ? picked.filter((j) => j !== i) : [...picked, i]);
       return;
     }
+    const end = edgeEnd(editing, i);
+    if (end) {
+      setPoints([i]);
+      svg.current?.setPointerCapture(e.pointerId);
+      setDrag({ kind: "edge", end, together: editing.closed });
+      return;
+    }
     const indices = picked.includes(i) ? picked : [i];
     if (!picked.includes(i)) setPoints([i]);
     svg.current?.setPointerCapture(e.pointerId);
@@ -748,9 +803,9 @@ export function Canvas() {
         ? "pan"
         : drawing
           ? "draw"
-          : drag?.kind === "move" || drag?.kind === "points"
+          : drag?.kind === "move" || drag?.kind === "points" || drag?.kind === "edge"
             ? "grabbing"
-            : hover
+            : hover && !placed.find((p) => p.key === hover)?.saved.edge
               ? "move"
               : undefined;
 

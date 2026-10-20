@@ -8,6 +8,7 @@ export interface Path {
   closed: boolean;
   fit?: { x: "exact" | "fit" | "auto"; y: "exact" | "fit" | "auto" };
   aspect?: number;
+  edge?: { start: number; end: number; reverse?: boolean };
 }
 
 export interface Section {

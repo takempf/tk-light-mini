@@ -1,4 +1,4 @@
-import type { Fit, LightPath } from "./types.js";
+import type { EdgeRange, Fit, LightPath } from "./types.js";
 
 type Pt = [number, number];
 
@@ -164,32 +164,149 @@ export function splitPath(points: readonly Pt[], closed: boolean, n: number): Pt
   });
 }
 
-/**
- * A closed loop just inside the screen edges, `width` thick, starting at the
- * bottom right and going up the right side. It fits the screen both ways, so it
- * stays flush when the thickness or the screen changes.
- */
-export function edgeLoop(aspect: number, width: number): LightPath {
+/** A place around an edge loop, in 0..4 (see `EdgeRange`). One already in range stays exact. */
+const around = (t: number) => {
+  const r = t % 4;
+  return r < 0 ? (r + 4) % 4 : r || 0;
+};
+
+/** How far an edge loop runs, in sides: up to 4, all the way round. */
+export const edgeSpan = ({ start, end, reverse }: EdgeRange) =>
+  around((reverse ? -1 : 1) * (end - start)) || 4;
+
+/** The places of an edge loop's points: its start, the corners it turns, and its end. */
+export function edgeStops(edge: EdgeRange): number[] {
+  const dir = edge.reverse ? -1 : 1;
+  const span = edgeSpan(edge);
+  const stops = [edge.start];
+  let corner = edge.reverse ? Math.ceil(edge.start) - 1 : Math.floor(edge.start) + 1;
+  for (; dir * (corner - edge.start) < span; corner += dir) stops.push(corner);
+  if (span < 4) stops.push(edge.end);
+  return stops.map(around);
+}
+
+/** An edge loop's corners, from the bottom right counterclockwise, `width / 2` in. */
+function edgeCorners(aspect: number, width: number): Pt[] {
   const iy = width / 2;
   const ix = iy / aspect;
-  return {
-    points: [
-      [1 - ix, 1 - iy],
-      [1 - ix, iy],
-      [ix, iy],
-      [ix, 1 - iy],
-    ],
-    width,
-    closed: true,
-    fit: { x: "fit", y: "fit" },
-  };
+  return [
+    [1 - ix, 1 - iy],
+    [1 - ix, iy],
+    [ix, iy],
+    [ix, 1 - iy],
+  ];
+}
+
+/** The spot at place `t` on the loop through `corners`. */
+function edgePoint(corners: readonly Pt[], t: number): Pt {
+  const side = Math.floor(t) % 4;
+  const u = t - Math.floor(t);
+  const [a, b] = [corners[side] as Pt, corners[(side + 1) % 4] as Pt];
+  return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+}
+
+/**
+ * A loop just inside the screen edges, `width` thick, from `edge.start` to
+ * `edge.end`. By default it starts at the bottom right and goes up the right
+ * side, all the way round. An end that stops at a corner reaches on to the
+ * screen's edge, so the band stays flush there.
+ */
+export function edgeLoop(
+  aspect: number,
+  width: number,
+  edge: EdgeRange = { start: 0, end: 0 },
+): LightPath {
+  const corners = edgeCorners(aspect, width);
+  const stops = edgeStops(edge);
+  const points = stops.map((t) => edgePoint(corners, t));
+  const closed = edgeSpan(edge) === 4;
+  /** `end`, on past `from` to the screen's edge. Legs run along a side. */
+  const flush = ([x, y]: Pt, [fx, fy]: Pt): Pt =>
+    x === fx ? [x, y === fy ? y : y < fy ? 0 : 1] : [x < fx ? 0 : 1, y];
+  if (!closed && points.length > 1) {
+    if (Number.isInteger(stops[0])) points[0] = flush(points[0] as Pt, points[1] as Pt);
+    const n = points.length;
+    if (Number.isInteger(stops[n - 1]))
+      points[n - 1] = flush(points[n - 1] as Pt, points[n - 2] as Pt);
+  }
+  return { points, width, closed, fit: { x: "fit", y: "fit" }, edge };
+}
+
+/**
+ * The place on an edge loop `width` thick nearest `p`, on a screen `aspect`
+ * wide. Within `snap` (in screen heights) of a corner, the middle of a side or
+ * one of `marks`, it's that instead.
+ */
+export function edgeAt(
+  p: Pt,
+  aspect: number,
+  width: number,
+  snap = 0,
+  marks: readonly number[] = [],
+): number {
+  const corners = edgeCorners(aspect, width);
+  // In screen heights, so both axes measure the same.
+  const gap = (a: Pt, b: Pt) => Math.hypot((a[0] - b[0]) * aspect, a[1] - b[1]);
+  let best = { t: 0, d: Number.POSITIVE_INFINITY };
+  corners.forEach((a, side) => {
+    const b = corners[(side + 1) % 4] as Pt;
+    const [dx, dy] = [(b[0] - a[0]) * aspect, b[1] - a[1]];
+    const len2 = dx * dx + dy * dy;
+    const u = len2 > 0 ? clamp01(((p[0] - a[0]) * aspect * dx + (p[1] - a[1]) * dy) / len2) : 0;
+    const d = gap(p, edgePoint(corners, side + u));
+    if (d < best.d) best = { t: around(side + u), d };
+  });
+  const spot = edgePoint(corners, best.t);
+  const near = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, ...marks]
+    .map((m) => ({ m: around(m), d: gap(spot, edgePoint(corners, around(m))) }))
+    .filter(({ d }) => d <= snap)
+    .sort((a, b) => a.d - b.d)[0];
+  return near ? near.m : best.t;
+}
+
+/** Place `t` on an edge loop, moved by `[dx, dy]` and back onto the loop. */
+export function edgeNudge(t: number, [dx, dy]: Pt, aspect: number, width: number): number {
+  const [x, y] = edgePoint(edgeCorners(aspect, width), t);
+  return edgeAt([x + dx, y + dy], aspect, width);
+}
+
+/**
+ * An edge loop's start or end moved to place `t`. The ends of a loop that goes
+ * all the way round move `together`. Otherwise an end stops at the other one:
+ * running into it closes the loop, so a loop never jumps between all the way
+ * round and a sliver.
+ */
+export function moveEdge(
+  edge: EdgeRange,
+  end: "start" | "end",
+  t: number,
+  together: boolean,
+): EdgeRange {
+  if (together) return { ...edge, start: t, end: t };
+  const next = { ...edge, [end]: t };
+  const before = edgeSpan(edge);
+  if (Math.abs(edgeSpan(next) - before) <= 2) return next;
+  if (before <= 2) return edge;
+  return { ...edge, [end]: end === "start" ? edge.end : edge.start };
+}
+
+/**
+ * The path joined end to start, or opened up. An edge loop closes all the way
+ * round, and opens at its last leg.
+ */
+export function setClosed(p: LightPath, closed: boolean): LightPath {
+  if (!p.edge) return { ...p, closed };
+  const end = closed ? p.edge.start : (edgeStops(p.edge).at(-1) as number);
+  return { ...p, closed, edge: { ...p.edge, end } };
 }
 
 /** The same path, run the other way. A closed loop keeps its start. */
 export function reversePath(p: LightPath): LightPath {
   const [first, ...rest] = p.points;
   const points = p.closed && first ? [first, ...rest.reverse()] : [...p.points].reverse();
-  return { ...p, points };
+  if (!p.edge) return { ...p, points };
+  const { start, end, reverse } = p.edge;
+  return { ...p, points, edge: { start: end, end: start, reverse: !reverse } };
 }
 
 /** Default path: from the left edge to the right edge, halfway down the screen. */
@@ -279,16 +396,25 @@ export function movePoints(p: LightPath, indices: Iterable<number>, [dx, dy]: Pt
 
 /** The path mirrored across the middle of the screen. */
 export function flipPath(p: LightPath, axis: "x" | "y"): LightPath {
+  const points = p.points.map(([x, y]): Pt => (axis === "x" ? [1 - x, y] : [x, 1 - y]));
+  if (!p.edge) return { ...p, points };
+  // Mirrored, places count the other way round from the opposite corner.
+  const m = axis === "x" ? 3 : 1;
+  const { start, end, reverse } = p.edge;
   return {
     ...p,
-    points: p.points.map(([x, y]) => (axis === "x" ? [1 - x, y] : [x, 1 - y])),
+    points,
+    edge: { start: around(m - start), end: around(m - end), reverse: !reverse },
   };
 }
 
 /** A closed loop starting at point `i` instead, going the same way. */
 export function startAt(p: LightPath, i: number): LightPath {
   if (i <= 0 || i >= p.points.length) return p;
-  return { ...p, points: [...p.points.slice(i), ...p.points.slice(0, i)] };
+  const points = [...p.points.slice(i), ...p.points.slice(0, i)];
+  if (!p.edge) return { ...p, points };
+  const t = edgeStops(p.edge)[i] ?? p.edge.start;
+  return { ...p, points, edge: { ...p.edge, start: t, end: p.closed ? t : p.edge.end } };
 }
 
 /** The path without points `indices`. */
@@ -460,8 +586,10 @@ function fitMap(p: LightPath, aspect: number): FitMap | undefined {
 /**
  * The path as placed on a screen `aspect` wide (width over height), after its
  * fit. The saved path keeps its own shape; this is what's drawn and sampled.
+ * An edge loop is laid out afresh, to sit just inside the edges.
  */
 export function resolvePath(p: LightPath, aspect: number): LightPath {
+  if (p.edge) return { ...p, ...edgeLoop(aspect, p.width, p.edge) };
   const m = fitMap(p, aspect);
   if (!m) return p;
   return {
@@ -472,9 +600,11 @@ export function resolvePath(p: LightPath, aspect: number): LightPath {
 
 /**
  * `edited`, a changed copy of `saved` as placed on a screen `aspect` wide, back
- * in `saved`'s own terms: the path to save.
+ * in `saved`'s own terms: the path to save. Reshaping an edge loop makes it an
+ * ordinary path, left where it is.
  */
 export function unresolvePath(edited: LightPath, saved: LightPath, aspect: number): LightPath {
+  if (saved.edge) return { points: edited.points, width: edited.width, closed: edited.closed };
   const m = fitMap(saved, aspect);
   if (!m) return edited;
   return {

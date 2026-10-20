@@ -382,8 +382,10 @@ export const useStore = create<AppState>()(
         },
         setSectionPath: (id, section, path) => {
           if (!get().drawing) record(`path:${id}:${section}`);
+          // An edge loop's points follow from its ends: save them as laid out.
+          const laid = path?.edge ? resolvePath(path, screenAspect()) : path;
           // A fitted path remembers the screen's shape, to keep its proportions.
-          const saved = path?.fit && !path.aspect ? { ...path, aspect: screenAspect() } : path;
+          const saved = laid?.fit && !laid.aspect ? { ...laid, aspect: screenAspect() } : laid;
           editSections(id, (sections) =>
             sections.map((s, k) => (k === section ? { ...s, path: saved } : s)),
           );

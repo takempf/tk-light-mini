@@ -15,6 +15,7 @@ import {
   removePoints,
   resolvePath,
   reversePath,
+  setClosed,
   startAt,
   unresolvePath,
 } from "../lib/path";
@@ -37,6 +38,24 @@ const FITS: { value: Fit; label: string }[] = [
   { value: "fit", label: "Fit" },
   { value: "auto", label: "Auto" },
 ];
+
+const CORNERS = [
+  "Bottom right corner",
+  "Top right corner",
+  "Top left corner",
+  "Bottom left corner",
+];
+const SIDES = ["Right", "Top", "Left", "Bottom"];
+
+/** Where place `t` on an edge loop is, given its spot on screen. */
+function placeName(t: number, [x, y]: [number, number]): string {
+  const r = (Math.round(t * 100) / 100) % 4;
+  const side = Math.floor(r);
+  if (r === side) return CORNERS[side] as string;
+  return side % 2 === 0
+    ? `${SIDES[side]} edge, ${pct(y)} down`
+    : `${SIDES[side]} edge, ${pct(x)} across`;
+}
 
 function DetailLabel({ label, value, tag }: { label: string; value?: string; tag?: string }) {
   return (
@@ -104,7 +123,10 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
   };
   return (
     <div className="stack placement">
-      <DetailLabel label="Placement" value={path ? `${path.points.length} points` : "Not placed"} />
+      <DetailLabel
+        label="Placement"
+        value={path?.edge ? "Edge loop" : path ? `${path.points.length} points` : "Not placed"}
+      />
       <div className="button-row">
         {drawing ? (
           <Button size="sm" variant="primary" onClick={() => setDrawing(false)}>
@@ -124,15 +146,40 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
       </div>
       {path && !drawing && (
         <>
+          {path.edge && shown && (
+            <>
+              <DetailLabel
+                label="Start"
+                value={placeName(path.edge.start, shown.points[0] as [number, number])}
+              />
+              <DetailLabel
+                label="End"
+                value={
+                  path.closed
+                    ? "Back at the start"
+                    : placeName(path.edge.end, shown.points.at(-1) as [number, number])
+                }
+              />
+              <p className="meta">
+                {path.closed
+                  ? "Drag the start point along the edge to move it. To leave a gap, turn off Closed loop."
+                  : "Drag the start and end points along the edge to move them."}
+              </p>
+            </>
+          )}
           <Switch
             checked={path.closed}
-            onCheckedChange={(closed: boolean) => place({ ...path, closed })}
+            onCheckedChange={(closed: boolean) => place(setClosed(path, closed))}
           >
             Closed loop
           </Switch>
-          <FitRow label="Horizontal" value={fit.x} onChange={(f) => setFit("x", f)} />
-          <FitRow label="Vertical" value={fit.y} onChange={(f) => setFit("y", f)} />
-          {idle && <p className="meta">Auto follows the other side once it's set to Fit.</p>}
+          {!path.edge && (
+            <>
+              <FitRow label="Horizontal" value={fit.x} onChange={(f) => setFit("x", f)} />
+              <FitRow label="Vertical" value={fit.y} onChange={(f) => setFit("y", f)} />
+              {idle && <p className="meta">Auto follows the other side once it's set to Fit.</p>}
+            </>
+          )}
           <Slider
             label="Thickness"
             value={path.width}
@@ -161,7 +208,11 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
             </Button>
           </div>
           {shown && (
-            <PickedPoints path={shown} onChange={(p) => place(unresolvePath(p, path, aspect))} />
+            <PickedPoints
+              path={shown}
+              onChange={(p) => place(unresolvePath(p, path, aspect))}
+              onStart={(i) => place(startAt(path, i))}
+            />
           )}
         </>
       )}
@@ -169,13 +220,25 @@ function Placement({ device, section }: { device: AddedDevice; section: number }
   );
 }
 
-/** Exact position of a picked point, and what to do with picked points. */
-function PickedPoints({ path, onChange }: { path: LightPath; onChange: (p: LightPath) => void }) {
+/**
+ * Exact position of a picked point, and what to do with picked points. An edge
+ * loop's start and end move along the edge instead.
+ */
+function PickedPoints({
+  path,
+  onChange,
+  onStart,
+}: {
+  path: LightPath;
+  onChange: (p: LightPath) => void;
+  onStart: (i: number) => void;
+}) {
   const points = useStore((s) => s.points);
   const setPoints = useStore((s) => s.setPoints);
   const picked = points.filter((i) => i < path.points.length);
-  if (picked.length === 0) return null;
   const one = picked.length === 1 ? (picked[0] as number) : undefined;
+  const end = one === 0 || (!path.closed && one === path.points.length - 1);
+  if (picked.length === 0 || (path.edge && end)) return null;
   const pt = one === undefined ? undefined : path.points[one];
   const setAxis = (axis: 0 | 1, v: number) => {
     if (one === undefined || !pt || Number.isNaN(v)) return;
@@ -218,7 +281,7 @@ function PickedPoints({ path, onChange }: { path: LightPath; onChange: (p: Light
           <Button
             size="sm"
             onClick={() => {
-              onChange(startAt(path, one));
+              onStart(one);
               setPoints([0]);
             }}
           >

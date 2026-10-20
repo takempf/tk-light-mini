@@ -4,6 +4,7 @@ What changed in each release. `pnpm release` moves the notes under **Unreleased*
 
 ## Unreleased
 
+- An edge loop can start anywhere around the screen, and stop short to leave a gap. Drag its start and end points along the edge.
 - Corsair lights through iCUE are gone. The app no longer starts iCUE, and Corsair lights in a saved setup are dropped.
 
 ## 0.1.0 - 2026-10-01
