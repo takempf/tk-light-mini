@@ -65,3 +65,19 @@ it("stops saving after a revision conflict", async () => {
   expect(browserApi.saveSetup).toHaveBeenCalledTimes(1);
   expect(error).toHaveBeenCalledWith(expect.stringContaining("Revision conflict"));
 });
+
+it("keeps saving while edits keep coming, so the lights follow a drag", async () => {
+  stop = startAdminSession(vi.fn(), () => {});
+  await Promise.resolve();
+  // An edit every 20 ms for a second, like a drag.
+  for (let i = 0; i < 50; i++) {
+    useStore.getState().setCanvas(i % 2 ? "sunset" : "aurora");
+    await vi.advanceTimersByTimeAsync(20);
+  }
+  expect(vi.mocked(browserApi.saveSetup).mock.calls.length).toBeGreaterThanOrEqual(8);
+  await vi.advanceTimersByTimeAsync(350);
+  expect(vi.mocked(browserApi.saveSetup).mock.lastCall?.[0].source).toEqual({
+    kind: "scene",
+    scene: "sunset",
+  });
+});

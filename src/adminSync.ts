@@ -7,6 +7,12 @@ import { startSync } from "./sync";
 
 const scenes = new Set(["forest", "sunset", "aurora", "sea", "lava", "fire"]);
 
+/**
+ * Saves at most this often while edits keep coming, so the lights follow a
+ * drag instead of waiting for it to stop.
+ */
+const SAVE_MS = 100;
+
 export function startAdminSession(
   onError: (message: string) => void,
   onReady: () => void,
@@ -53,6 +59,15 @@ export function startAdminSession(
     };
   };
 
+  /** Save soon, unless a save is already on its way. */
+  const schedule = () => {
+    if (timer !== undefined) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void save();
+    }, SAVE_MS);
+  };
+
   const save = async () => {
     if (!active || blocked || saving) return;
     const next = snapshot();
@@ -71,7 +86,8 @@ export function startAdminSession(
       );
     } finally {
       saving = false;
-      if (active && !blocked) timer = setTimeout(() => void save(), 100);
+      // Edits made meanwhile go next.
+      if (active && !blocked) schedule();
     }
   };
 
@@ -105,8 +121,7 @@ export function startAdminSession(
           state.settings === previous.settings
         )
           return;
-        clearTimeout(timer);
-        timer = setTimeout(() => void save(), 250);
+        schedule();
       });
       calibrationTimer = setInterval(() => {
         if (useStore.getState().calibrating) publishCalibration();
