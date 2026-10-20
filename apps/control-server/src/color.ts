@@ -59,14 +59,17 @@ const contains = (points: readonly [number, number][], x: number, y: number) => 
   return inside;
 };
 
-/** Sample exactly the same mitered segment bands drawn by the editor. */
+/**
+ * Sample exactly the same mitered segment bands drawn by the editor, laid over
+ * `rect`: the picture, inside any letterbox bars.
+ */
 export function samplePath(
   frame: Frame,
   path: Path,
   count: number,
   tuning: Setup["tuning"],
+  rect: Rect = { x0: 0, y0: 0, x1: frame.width, y1: frame.height },
 ): Rgb[] {
-  const rect = contentRect(frame);
   const n = Math.max(1, Math.min(100, count));
   const w = rect.x1 - rect.x0,
     h = rect.y1 - rect.y0;

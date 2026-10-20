@@ -1,8 +1,14 @@
 import { fitSections } from "../../../packages/light-core/src/sections.js";
-import { calibrate, rgb, samplePath, scale } from "./color.js";
+import { calibrate, contentRect, type Rect, rgb, samplePath, scale } from "./color.js";
 import type { FrameRegistry } from "./frames.js";
 import { ScenePainter } from "./scenes.js";
 import type { Device, Frame, FrameSource, Rgb, Setup } from "./types.js";
+
+/** A frame to sample, and where its picture is inside any letterbox bars. */
+interface Picture {
+  frame: Frame;
+  rect: Rect;
+}
 
 /** Segments the light shows: its razer count, or one without razer mode. */
 const segmentCount = (device: Device) =>
@@ -75,7 +81,7 @@ export class LightEngine {
   private held = new Map<string, number>();
   private lastTick = 0;
   private calibration: { id: string; color: Rgb; raw: boolean; until: number } | null = null;
-  private frameCache = new Map<string, Frame | null>();
+  private frameCache = new Map<string, Picture | null>();
   private cacheAt = 0;
   private readonly painter = new ScenePainter();
   private startedAt: number | null = null;
@@ -120,26 +126,35 @@ export class LightEngine {
   }
 
   private sourceFrame(source: FrameSource, now: number): Frame | null {
+    return this.sourcePicture(source, now)?.frame ?? null;
+  }
+
+  private sourcePicture(source: FrameSource, now: number): Picture | null {
     if (this.cacheAt !== now) {
       this.cacheAt = now;
       this.frameCache.clear();
     }
     const key = JSON.stringify(source);
     if (this.frameCache.has(key)) return this.frameCache.get(key) ?? null;
-    const frame = this.createSourceFrame(source, now);
-    this.frameCache.set(key, frame);
-    return frame;
+    const picture = this.createSourcePicture(source, now);
+    this.frameCache.set(key, picture);
+    return picture;
   }
 
-  private createSourceFrame(source: FrameSource, now: number): Frame | null {
+  private createSourcePicture(source: FrameSource, now: number): Picture | null {
     if (source.kind === "color") return null;
     if (source.kind === "scene") {
       this.startedAt ??= now;
-      return this.painter.paint(source.scene, now - this.startedAt);
+      const frame = this.painter.paint(source.scene, now - this.startedAt);
+      // Scenes have no bars, though a dark sky or ground can look like them.
+      return { frame, rect: { x0: 0, y0: 0, x1: frame.width, y1: frame.height } };
     }
     const frame = this.frames.latest(source.senderId, now);
-    if (!frame) return this.sourceFrame(source.fallback ?? { kind: "scene", scene: "forest" }, now);
-    return source.filter === "phthalo" ? phthalo(frame) : frame;
+    if (!frame)
+      return this.sourcePicture(source.fallback ?? { kind: "scene", scene: "forest" }, now);
+    // The filter keeps the screen's bars but repaints them, so find them first.
+    const rect = contentRect(frame);
+    return { frame: source.filter === "phthalo" ? phthalo(frame) : frame, rect };
   }
 
   previewFor(setup: Setup, now: number, id?: string, section?: number): Frame | null {
@@ -243,12 +258,12 @@ export class LightEngine {
     const out: Rgb[] = [];
     for (const section of sectionsOf(device)) {
       const source = section.source ?? device.source ?? setup.source;
-      const frame = this.sourceFrame(source, now);
+      const picture = this.sourcePicture(source, now);
       const colors =
         source.kind === "color"
           ? Array.from({ length: section.count }, () => rgb(source.color))
-          : frame && section.path
-            ? samplePath(frame, section.path, section.count, setup.tuning)
+          : picture && section.path
+            ? samplePath(picture.frame, section.path, section.count, setup.tuning, picture.rect)
             : Array.from({ length: section.count }, () => [0, 0, 0] as Rgb);
       out.push(...(section.on === false ? colors.map(() => [0, 0, 0] as Rgb) : colors));
     }

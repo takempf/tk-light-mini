@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { contentRect, samplePath } from "./color.js";
 import { LightEngine, phthalo } from "./engine.js";
 import { FrameRegistry } from "./frames.js";
 import { DEFAULT_SETUP } from "./setup.js";
@@ -189,6 +190,78 @@ it("samples colors for the editor while sync is off without sending them", () =>
   expect(sent).toEqual([]);
   engine.tick({ ...setup, enabled: true }, 1100);
   expect(sent).toContain("color 192.168.1.2");
+});
+
+it("samples a scene whole, though its dark ground looks like a letterbox bar", () => {
+  const engine = new LightEngine(new FrameRegistry(), { turn() {}, color() {}, razer() {} });
+  const path = {
+    points: [
+      [0, 0.98],
+      [1, 0.98],
+    ] as [number, number][],
+    width: 0.04,
+    closed: false,
+  };
+  const setup: Setup = {
+    ...structuredClone(DEFAULT_SETUP),
+    tuning: { saturation: 1, brightness: 1, smoothing: 0 },
+    source: { kind: "scene", scene: "forest" },
+    devices: [
+      {
+        ...light("one", "192.168.1.2"),
+        razer: true,
+        segments: 4,
+        sections: [{ count: 4, color: "path", path }],
+      },
+    ],
+  };
+  engine.tick(setup, 1000);
+  const scene = engine.previewFor(setup, 1000);
+  if (!scene) throw new Error("No scene");
+  const cropped = samplePath(scene, path, 4, setup.tuning, contentRect(scene));
+  expect(engine.live.get("192.168.1.2")).toEqual(samplePath(scene, path, 4, setup.tuning));
+  expect(engine.live.get("192.168.1.2")).not.toEqual(cropped);
+});
+
+it("skips a shared screen's letterbox bars, with or without the filter", () => {
+  const frames = new FrameRegistry();
+  frames.connect("tv", "TV");
+  const bar = (i: number) => i < 16 * 3 || i >= 16 * 13;
+  const screen: Frame = {
+    width: 16,
+    height: 16,
+    sequence: 1,
+    capturedAt: 100,
+    bgra: Buffer.from(
+      Array.from({ length: 16 * 16 }, (_, i) =>
+        bar(i) ? [0, 0, 0, 255] : [0, 0, 255, 255],
+      ).flat(),
+    ),
+  };
+  frames.publish("tv", screen, 1000);
+  const engine = new LightEngine(frames, { turn() {}, color() {}, razer() {} });
+  const path = {
+    points: [
+      [0, 0],
+      [1, 0],
+    ] as [number, number][],
+    width: 0.2,
+    closed: false,
+  };
+  const setup: Setup = {
+    ...structuredClone(DEFAULT_SETUP),
+    tuning: { saturation: 1, brightness: 1, smoothing: 0 },
+    source: { kind: "remote", senderId: "tv" },
+    devices: [{ ...light("one", "192.168.1.2"), sections: [{ count: 1, color: "path", path }] }],
+  };
+  engine.tick(setup, 1000);
+  expect(engine.live.get("192.168.1.2")).toEqual([[255, 0, 0]]);
+  // The filter paints the bars green too, but they're still bars.
+  engine.tick({ ...setup, source: { kind: "remote", senderId: "tv", filter: "phthalo" } }, 1100);
+  const green = phthalo(screen);
+  const picture = { x0: 0, y0: 3, x1: 16, y1: 13 };
+  expect(engine.live.get("192.168.1.2")).toEqual(samplePath(green, path, 1, setup.tuning, picture));
+  expect(engine.live.get("192.168.1.2")).not.toEqual(samplePath(green, path, 1, setup.tuning));
 });
 
 it("fits sections to the light's segments, so a resized light still covers its path", () => {

@@ -51,6 +51,7 @@ describe("color engine parity", () => {
         },
         1,
         tuning,
+        contentRect(image),
       ),
     ).toEqual([[255, 0, 0]]);
   });
