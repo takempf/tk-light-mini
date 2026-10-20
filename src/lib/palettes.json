@@ -1,0 +1,139 @@
+{
+  "phthalo": [
+    { "key": "shades", "label": "Shades", "colors": ["#06140f", "#123524", "#1f6b50", "#8fd4b5"] }
+  ],
+  "forest": [
+    {
+      "key": "sky",
+      "label": "Sky",
+      "colors": [
+        "#080a12",
+        "#0e1422",
+        "#172036",
+        "#222e4a",
+        "#34425f",
+        "#4e5c7a",
+        "#7582a0",
+        "#aab4c8"
+      ]
+    },
+    {
+      "key": "trees",
+      "label": "Trees",
+      "colors": ["#030504", "#070c0b", "#0c1614", "#13211f", "#1c2e2c"]
+    },
+    { "key": "fireflies", "label": "Fireflies", "colors": ["#d4e46e"] }
+  ],
+  "sunset": [
+    {
+      "key": "sky",
+      "label": "Sky",
+      "colors": [
+        "#1a0f2e",
+        "#2d1543",
+        "#4d1b56",
+        "#7a2160",
+        "#a8305e",
+        "#d34d52",
+        "#ef7b45",
+        "#f9a94b",
+        "#ffd57e",
+        "#fff2c2"
+      ]
+    },
+    {
+      "key": "sea",
+      "label": "Sea",
+      "colors": [
+        "#0b0616",
+        "#1a0f2e",
+        "#2d1543",
+        "#4d1b56",
+        "#7a2160",
+        "#d34d52",
+        "#f9a94b",
+        "#ffd57e"
+      ]
+    }
+  ],
+  "aurora": [
+    {
+      "key": "aurora",
+      "label": "Aurora",
+      "colors": [
+        "#03050b",
+        "#071322",
+        "#0b2a33",
+        "#0f4d45",
+        "#178057",
+        "#2fb56c",
+        "#7fe39a",
+        "#d8ffc8"
+      ]
+    },
+    {
+      "key": "sky",
+      "label": "Sky",
+      "colors": ["#03050b", "#0d0b24", "#1f1440", "#3a1d5e", "#62307e"]
+    },
+    {
+      "key": "snow",
+      "label": "Snow",
+      "colors": ["#070b16", "#0e1828", "#172a3c", "#24424e", "#3b6a68"]
+    },
+    { "key": "trees", "label": "Trees", "colors": ["#030504"] },
+    { "key": "stars", "label": "Stars", "colors": ["#c8d4f0"] }
+  ],
+  "sea": [
+    {
+      "key": "water",
+      "label": "Water",
+      "colors": [
+        "#020a12",
+        "#04192a",
+        "#062a3f",
+        "#0a3f55",
+        "#0f5a6b",
+        "#1a7a80",
+        "#34a39a",
+        "#7fd3c0",
+        "#d4fff0"
+      ]
+    }
+  ],
+  "lava": [
+    {
+      "key": "lava",
+      "label": "Lava",
+      "colors": [
+        "#12061c",
+        "#2a0b33",
+        "#4d1040",
+        "#7c1a45",
+        "#b32c3f",
+        "#e0503a",
+        "#f78a3d",
+        "#ffc15e",
+        "#fff0a8"
+      ]
+    }
+  ],
+  "fire": [
+    {
+      "key": "fire",
+      "label": "Fire",
+      "colors": [
+        "#070203",
+        "#1f0705",
+        "#3d0c06",
+        "#661605",
+        "#962508",
+        "#c43d0a",
+        "#e8650f",
+        "#f7931e",
+        "#ffc24a",
+        "#ffe89a"
+      ]
+    }
+  ]
+}

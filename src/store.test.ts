@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./lib/api";
 import { resolveCalibration } from "./lib/calibration";
+import { defaultPalette } from "./lib/palettes";
 import { resolvePath } from "./lib/path";
-import type { GoveeDevice, LightPath } from "./lib/types";
+import type { GoveeDevice, LightPath, Palette } from "./lib/types";
 import { DEFAULT_SETTINGS, migrate, toEngineConfig, useStore } from "./store";
 
 vi.mock("./lib/api", async () => (await import("./test/mockApi")).mockApiModule());
@@ -15,6 +16,7 @@ beforeEach(() => {
     devices: [],
     enabled: false,
     settings: DEFAULT_SETTINGS,
+    palettes: [],
     discovered: [],
     scanning: false,
     scanError: null,
@@ -262,6 +264,8 @@ describe("settings", () => {
       fps: 30,
       monitor: 0,
       canvas: "screen",
+      palette: {},
+      controls: {},
       tuning: DEFAULT_SETTINGS.tuning,
       devices: [
         {
@@ -274,6 +278,74 @@ describe("settings", () => {
         },
       ],
     });
+  });
+});
+
+describe("palettes", () => {
+  const forest = () => useStore.getState().settings.palettes.forest;
+
+  it("copies a palette in full, picks it, and sends its colors", () => {
+    const s = useStore.getState();
+    s.setCanvas("forest");
+    expect(toEngineConfig(useStore.getState()).palette).toEqual({});
+    const id = s.copyPalette(defaultPalette("forest"));
+    expect(forest()).toBe(id);
+    const copy = useStore.getState().palettes[0] as Palette;
+    expect(copy).toMatchObject({ id, name: "Custom", canvas: "forest" });
+    expect(Object.keys(copy.colors)).toEqual(["sky", "trees", "fireflies"]);
+
+    s.editPalette(id, { colors: { ...copy.colors, fireflies: ["#ff0000"] } });
+    expect(toEngineConfig(useStore.getState()).palette.fireflies).toEqual(["#ff0000"]);
+    // Other canvases keep theirs.
+    s.setCanvas("sea");
+    expect(toEngineConfig(useStore.getState()).palette).toEqual({});
+  });
+
+  it("names copies apart", () => {
+    const s = useStore.getState();
+    s.copyPalette(defaultPalette("sea"));
+    const second = s.copyPalette(defaultPalette("sea"));
+    const p = useStore.getState().palettes.find((x) => x.id === second) as Palette;
+    s.copyPalette(p);
+    expect(useStore.getState().palettes.map((x) => x.name)).toEqual([
+      "Custom",
+      "Custom 2",
+      "Custom 2 copy",
+    ]);
+  });
+
+  it("leaves built-in palettes alone", () => {
+    const s = useStore.getState();
+    s.editPalette("forest", { name: "Mine" });
+    expect(useStore.getState().palettes).toEqual([]);
+    const id = s.copyPalette(defaultPalette("forest"));
+    s.editPalette(id, { name: "Mine" });
+    expect(useStore.getState().palettes[0]?.name).toBe("Mine");
+  });
+
+  it("goes back to the built-in one when the picked palette is deleted", () => {
+    const s = useStore.getState();
+    s.setCanvas("forest");
+    const id = s.copyPalette(defaultPalette("forest"));
+    s.pickPalette("sea", "sea");
+    s.deletePalette(id);
+    expect(useStore.getState().palettes).toEqual([]);
+    expect(useStore.getState().settings.palettes).toEqual({ sea: "sea" });
+    expect(toEngineConfig(useStore.getState()).palette).toEqual({});
+  });
+});
+
+describe("controls", () => {
+  it("are kept per canvas and sent for the one shown", () => {
+    const s = useStore.getState();
+    s.setCanvas("lava");
+    s.setControl("lava", "blobs", 3);
+    s.setControl("lava", "speed", 2);
+    s.setControl("fire", "height", 0.5);
+    expect(toEngineConfig(useStore.getState()).controls).toEqual({ blobs: 3, speed: 2 });
+    s.resetControls("lava");
+    expect(toEngineConfig(useStore.getState()).controls).toEqual({});
+    expect(useStore.getState().settings.controls).toEqual({ fire: { height: 0.5 } });
   });
 });
 
@@ -376,6 +448,7 @@ describe("setup file", () => {
     s.addDevice(lamp);
     s.renameDevice(lamp.id, "Desk");
     s.setTuning({ saturation: 1.8 });
+    const id = s.copyPalette(defaultPalette("lava"));
     await useStore.getState().exportSetup();
     const [name, text] = vi.mocked(api.exportSetup).mock.calls.at(-1) ?? [];
     expect(name).toMatch(/\.json$/);
@@ -383,11 +456,14 @@ describe("setup file", () => {
     useStore.getState().removeDevice(lamp.id);
     useStore.getState().addDevice(strip);
     useStore.getState().resetTuning();
+    useStore.getState().deletePalette(id);
     vi.mocked(api.importSetup).mockResolvedValueOnce(text ?? null);
     expect(await useStore.getState().importSetup()).toBe(true);
     const after = useStore.getState();
     expect(after.devices.map((d) => [d.id, d.name])).toEqual([[lamp.id, "Desk"]]);
     expect(after.settings.tuning.saturation).toBe(1.8);
+    expect(after.palettes.map((p) => p.id)).toEqual([id]);
+    expect(after.settings.palettes.lava).toBe(id);
     expect(after.selection).toBeNull();
     expect(after.past).toEqual([]);
   });
@@ -400,7 +476,8 @@ describe("setup file", () => {
     expect(useStore.getState().devices).toHaveLength(1);
   });
 
-  it("migrates old files", async () => {
+  it("migrates old files, keeping the palettes here", async () => {
+    const id = useStore.getState().copyPalette(defaultPalette("fire"));
     const old = {
       kind: "light-mini-setup",
       version: 7,
@@ -410,6 +487,9 @@ describe("setup file", () => {
     vi.mocked(api.importSetup).mockResolvedValueOnce(JSON.stringify(old));
     await useStore.getState().importSetup();
     expect(useStore.getState().settings.canvas).toBe("screen");
+    expect(useStore.getState().settings.palettes).toEqual({});
+    expect(useStore.getState().settings.controls).toEqual({});
+    expect(useStore.getState().palettes.map((p) => p.id)).toEqual([id]);
   });
 });
 

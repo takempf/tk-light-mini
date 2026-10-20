@@ -12,6 +12,15 @@ use std::sync::OnceLock;
 
 pub type Rgb = [u8; 3];
 
+/// `"rrggbb"` as a color.
+pub fn parse_hex(hex: &str) -> Option<Rgb> {
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([ch(0)?, ch(2)?, ch(4)?])
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Tuning {

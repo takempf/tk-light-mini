@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use crate::app_icon;
 use crate::calibration::Calibration;
 use crate::capture::{list_monitors, CaptureError, Capturer};
-use crate::color::{content_rect, Frame, Rect, Rgb, Smoother, Tuning};
+use crate::color::{content_rect, parse_hex, Frame, Rect, Rgb, Smoother, Tuning};
 use crate::govee::{control_addr, Sender};
 use crate::paths::{PathConfig, PathSampler};
 use crate::preview::Preview;
-use crate::visuals::{canvas_size, phthalo, Canvas, Painter};
+use crate::visuals::{canvas_size, phthalo, Canvas, Look, Painter};
 
 /// Where a segment gets its color: its section's path, or fixed. From JSON as
 /// `"path"` or `"#rrggbb"`.
@@ -36,14 +36,6 @@ impl Source {
             Source::Fixed(c) => c,
         }
     }
-}
-
-fn parse_hex(hex: &str) -> Option<Rgb> {
-    if hex.len() != 6 || !hex.is_ascii() {
-        return None;
-    }
-    let ch = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
-    Some([ch(0)?, ch(2)?, ch(4)?])
 }
 
 impl<'de> Deserialize<'de> for Source {
@@ -102,6 +94,9 @@ pub struct EngineConfig {
     /// What the lights follow: the screen, or a scene.
     #[serde(default)]
     pub canvas: Canvas,
+    /// The canvas's colors and controls. Empty uses its own.
+    #[serde(flatten)]
+    pub look: Look,
     pub tuning: Tuning,
     pub devices: Vec<DeviceTarget>,
 }
@@ -113,6 +108,7 @@ impl Default for EngineConfig {
             fps: 30,
             monitor: 0,
             canvas: Canvas::Screen,
+            look: Look::default(),
             tuning: Tuning::default(),
             devices: Vec::new(),
         }
@@ -630,13 +626,13 @@ fn run(shared: Arc<Shared>) {
             Canvas::Screen => {}
             Canvas::Phthalo => {
                 if let (true, Some(f)) = (fresh || resample, cache.frame()) {
-                    phthalo(&f, &mut painted.data);
+                    phthalo(&f, &cfg.look, &mut painted.data);
                     (painted.width, painted.height) = (f.width, f.height);
                 }
             }
             scene => {
                 let t = start.elapsed().as_secs_f32();
-                painter.paint(scene, t, size.0, size.1, &mut painted.data);
+                painter.paint(scene, &cfg.look, t, size.0, size.1, &mut painted.data);
                 (painted.width, painted.height) = size;
                 // Scenes have no bars.
                 rect = Some(Rect {
@@ -805,6 +801,13 @@ mod tests {
         let json = json.replace("\"monitor\"", "\"canvas\":\"forest\",\"monitor\"");
         let c: EngineConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(c.canvas, Canvas::Forest);
+        assert_eq!(c.look, Look::default());
+        let json = json.replace(
+            "\"monitor\"",
+            "\"palette\":{\"sky\":[\"#ff0000\"]},\"monitor\"",
+        );
+        let c: EngineConfig = serde_json::from_str(&json).unwrap();
+        assert_ne!(c.look, Look::default());
     }
 
     #[test]

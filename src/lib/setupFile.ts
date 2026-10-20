@@ -1,4 +1,4 @@
-import type { AddedDevice, Settings } from "./types";
+import type { AddedDevice, Palette, Settings } from "./types";
 
 /** Marks a file as a light setup. */
 const KIND = "light-mini-setup";
@@ -9,6 +9,8 @@ export const SETUP_FILE_NAME = "light-mini-setup.json";
 export interface Setup {
   devices: AddedDevice[];
   settings: Settings;
+  /** Missing in files from before palettes. */
+  palettes?: Palette[];
 }
 
 /** A setup file's text, stamped with the saved-state `version` it was made at. */
@@ -45,7 +47,12 @@ export function readSetupText(text: string, current: number): { state: Setup; ve
   if (!d.devices.every(isDevice)) {
     throw new Error("That setup has a light it can't read.");
   }
-  return { state: { devices: d.devices, settings: d.settings }, version: d.version };
+  if (d.palettes !== undefined && !(Array.isArray(d.palettes) && d.palettes.every(isPalette))) {
+    throw new Error("That setup has a palette it can't read.");
+  }
+  const state: Setup = { devices: d.devices, settings: d.settings };
+  if (d.palettes) state.palettes = d.palettes;
+  return { state, version: d.version };
 }
 
 /** Enough of a saved light to find it and migrate it. */
@@ -53,5 +60,21 @@ const isDevice = (d: unknown): boolean => {
   const x = d as Partial<AddedDevice> | null;
   return (
     typeof x === "object" && x !== null && typeof x.id === "string" && typeof x.ip === "string"
+  );
+};
+
+const isPalette = (p: unknown): boolean => {
+  const x = p as Partial<Palette> | null;
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    typeof x.id === "string" &&
+    typeof x.name === "string" &&
+    typeof x.canvas === "string" &&
+    typeof x.colors === "object" &&
+    x.colors !== null &&
+    Object.values(x.colors).every(
+      (c) => Array.isArray(c) && c.every((h) => typeof h === "string" && /^#[0-9a-f]{6}$/i.test(h)),
+    )
   );
 };

@@ -1,0 +1,214 @@
+{
+  "phthalo": [
+    {
+      "key": "contrast",
+      "label": "Contrast",
+      "min": 0.5,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    }
+  ],
+  "forest": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "clouds",
+      "label": "Clouds",
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "default": 0.5,
+      "format": "percent"
+    },
+    {
+      "key": "fireflies",
+      "label": "Fireflies",
+      "min": 0,
+      "max": 24,
+      "step": 1,
+      "default": 6,
+      "format": "count"
+    }
+  ],
+  "sunset": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "sun",
+      "label": "Sun height",
+      "min": -0.15,
+      "max": 0.8,
+      "step": 0.01,
+      "default": 0.1,
+      "format": "percent"
+    },
+    {
+      "key": "size",
+      "label": "Sun size",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "clouds",
+      "label": "Clouds",
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "default": 0.5,
+      "format": "percent"
+    }
+  ],
+  "aurora": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "glow",
+      "label": "Glow",
+      "min": 0.3,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "stars",
+      "label": "Stars",
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "default": 0.5,
+      "format": "percent"
+    }
+  ],
+  "sea": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "rays",
+      "label": "Light rays",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "caustics",
+      "label": "Caustics",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "snow",
+      "label": "Marine snow",
+      "min": 0,
+      "max": 1,
+      "step": 0.05,
+      "default": 0.5,
+      "format": "percent"
+    }
+  ],
+  "lava": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "blobs",
+      "label": "Blobs",
+      "min": 1,
+      "max": 12,
+      "step": 1,
+      "default": 7,
+      "format": "count"
+    },
+    {
+      "key": "size",
+      "label": "Blob size",
+      "min": 0.4,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "heat",
+      "label": "Heat",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    }
+  ],
+  "fire": [
+    {
+      "key": "speed",
+      "label": "Speed",
+      "min": 0,
+      "max": 3,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "height",
+      "label": "Flame height",
+      "min": 0.3,
+      "max": 1.4,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    },
+    {
+      "key": "glow",
+      "label": "Room glow",
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "default": 1,
+      "format": "percent"
+    }
+  ]
+}

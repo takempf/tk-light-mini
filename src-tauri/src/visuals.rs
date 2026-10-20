@@ -6,12 +6,16 @@
 //! purpose, and a frame costs well under a millisecond. The lights average
 //! whole regions, so dithered pixels blend into smooth in-between colors.
 
-use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use crate::color::{Frame, Rgb};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer};
+
+use crate::color::{parse_hex, Frame, Rgb};
 
 /// What the lights follow. From JSON as its camelCase name.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Canvas {
     #[default]
@@ -49,116 +53,124 @@ pub fn canvas_size(aspect: f32) -> (usize, usize) {
     (WIDTH, h)
 }
 
-const fn hex(c: u32) -> Rgb {
-    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+/// Colors a canvas paints with, by slot ("sky", "trees"...): each a ramp
+/// from dark to light, or one color. From JSON as `{"sky": ["#rrggbb", ...]}`.
+/// Slots left out, or empty, take the canvas's defaults.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Palette(HashMap<String, Vec<Rgb>>);
+
+fn parse_colors(hexes: &[String]) -> Option<Vec<Rgb>> {
+    hexes
+        .iter()
+        .map(|c| c.strip_prefix('#').and_then(parse_hex))
+        .collect()
 }
 
-const PHTHALO: [Rgb; 4] = [hex(0x06140f), hex(0x123524), hex(0x1f6b50), hex(0x8fd4b5)];
+impl<'de> Deserialize<'de> for Palette {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        HashMap::<String, Vec<String>>::deserialize(d)?
+            .into_iter()
+            .map(|(slot, hexes)| match parse_colors(&hexes) {
+                Some(colors) => Ok((slot, colors)),
+                None => Err(D::Error::custom(format!("bad color in {slot}"))),
+            })
+            .collect::<Result<_, _>>()
+            .map(Palette)
+    }
+}
 
-const NIGHT: [Rgb; 8] = [
-    hex(0x080a12),
-    hex(0x0e1422),
-    hex(0x172036),
-    hex(0x222e4a),
-    hex(0x34425f),
-    hex(0x4e5c7a),
-    hex(0x7582a0),
-    hex(0xaab4c8),
-];
-const PINE: [Rgb; 5] = [
-    hex(0x030504),
-    hex(0x070c0b),
-    hex(0x0c1614),
-    hex(0x13211f),
-    hex(0x1c2e2c),
-];
-const FIREFLY: Rgb = hex(0xd4e46e);
+/// Each canvas's own colors, shared with the app, which lists them to pick
+/// from and copy.
+static DEFAULTS: LazyLock<HashMap<Canvas, Palette>> = LazyLock::new(|| {
+    #[derive(Deserialize)]
+    struct Slot {
+        key: String,
+        colors: Vec<String>,
+    }
+    let all: HashMap<Canvas, Vec<Slot>> =
+        serde_json::from_str(include_str!("../../src/lib/palettes.json")).expect("palettes.json");
+    all.into_iter()
+        .map(|(canvas, slots)| {
+            let slots = slots
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.key,
+                        parse_colors(&s.colors).expect("palettes.json colors"),
+                    )
+                })
+                .collect();
+            (canvas, Palette(slots))
+        })
+        .collect()
+});
 
-const DUSK: [Rgb; 10] = [
-    hex(0x1a0f2e),
-    hex(0x2d1543),
-    hex(0x4d1b56),
-    hex(0x7a2160),
-    hex(0xa8305e),
-    hex(0xd34d52),
-    hex(0xef7b45),
-    hex(0xf9a94b),
-    hex(0xffd57e),
-    hex(0xfff2c2),
-];
-const TIDE: [Rgb; 8] = [
-    hex(0x0b0616),
-    hex(0x1a0f2e),
-    hex(0x2d1543),
-    hex(0x4d1b56),
-    hex(0x7a2160),
-    hex(0xd34d52),
-    hex(0xf9a94b),
-    hex(0xffd57e),
-];
+impl Palette {
+    /// Slot `name` for `canvas`: this palette's, or else the default. Never
+    /// empty.
+    pub fn get(&self, canvas: Canvas, name: &str) -> &[Rgb] {
+        match self.0.get(name) {
+            Some(colors) if !colors.is_empty() => colors,
+            _ => DEFAULTS
+                .get(&canvas)
+                .and_then(|p| p.0.get(name))
+                .filter(|c| !c.is_empty())
+                .map_or(&[[0, 0, 0]], |c| c),
+        }
+    }
+}
 
-const POLAR: [Rgb; 8] = [
-    hex(0x03050b),
-    hex(0x071322),
-    hex(0x0b2a33),
-    hex(0x0f4d45),
-    hex(0x178057),
-    hex(0x2fb56c),
-    hex(0x7fe39a),
-    hex(0xd8ffc8),
-];
-const VIOLET: [Rgb; 5] = [
-    hex(0x03050b),
-    hex(0x0d0b24),
-    hex(0x1f1440),
-    hex(0x3a1d5e),
-    hex(0x62307e),
-];
-const SNOW: [Rgb; 5] = [
-    hex(0x070b16),
-    hex(0x0e1828),
-    hex(0x172a3c),
-    hex(0x24424e),
-    hex(0x3b6a68),
-];
-const STAR: Rgb = hex(0xc8d4f0);
+/// A canvas's own settings ("speed", "clouds"...), by key. From JSON as
+/// `{"speed": 1.5}`. Keys left out take the defaults.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Controls(HashMap<String, f32>);
 
-const DEEP: [Rgb; 9] = [
-    hex(0x020a12),
-    hex(0x04192a),
-    hex(0x062a3f),
-    hex(0x0a3f55),
-    hex(0x0f5a6b),
-    hex(0x1a7a80),
-    hex(0x34a39a),
-    hex(0x7fd3c0),
-    hex(0xd4fff0),
-];
+#[derive(Deserialize)]
+struct Control {
+    key: String,
+    min: f32,
+    max: f32,
+    default: f32,
+}
 
-const LAVA: [Rgb; 9] = [
-    hex(0x12061c),
-    hex(0x2a0b33),
-    hex(0x4d1040),
-    hex(0x7c1a45),
-    hex(0xb32c3f),
-    hex(0xe0503a),
-    hex(0xf78a3d),
-    hex(0xffc15e),
-    hex(0xfff0a8),
-];
+/// Each canvas's controls, shared with the app, which shows them as sliders.
+static CONTROLS: LazyLock<HashMap<Canvas, Vec<Control>>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../src/lib/controls.json")).expect("controls.json")
+});
 
-const EMBER: [Rgb; 10] = [
-    hex(0x070203),
-    hex(0x1f0705),
-    hex(0x3d0c06),
-    hex(0x661605),
-    hex(0x962508),
-    hex(0xc43d0a),
-    hex(0xe8650f),
-    hex(0xf7931e),
-    hex(0xffc24a),
-    hex(0xffe89a),
-];
+impl Controls {
+    /// Control `key` of `canvas`: this one's, kept in range, or else the
+    /// default.
+    pub fn get(&self, canvas: Canvas, key: &str) -> f32 {
+        let control = CONTROLS
+            .get(&canvas)
+            .and_then(|cs| cs.iter().find(|c| c.key == key));
+        debug_assert!(control.is_some(), "{canvas:?} has no control {key}");
+        let Some(c) = control else { return 1.0 };
+        match self.0.get(key) {
+            Some(v) if v.is_finite() => v.clamp(c.min, c.max),
+            _ => c.default,
+        }
+    }
+}
+
+/// What a canvas is painted with, from the app.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Look {
+    pub palette: Palette,
+    pub controls: Controls,
+}
+
+impl Look {
+    fn colors(&self, canvas: Canvas, slot: &str) -> &[Rgb] {
+        self.palette.get(canvas, slot)
+    }
+
+    fn control(&self, canvas: Canvas, key: &str) -> f32 {
+        self.controls.get(canvas, key)
+    }
+}
 
 /// 4x4 Bayer matrix: where in 0..1 a pixel flips to the next color.
 #[inline(always)]
@@ -292,6 +304,10 @@ impl Img<'_> {
 /// Paints scenes. Holds what a scene carries from frame to frame.
 #[derive(Default)]
 pub struct Painter {
+    /// Scene time: seconds run at the scene's speed, so changing the speed
+    /// doesn't jump. And the clock time it was last painted at.
+    time: f32,
+    last: Option<f32>,
     /// Fire: heat per pixel, and the time it last stepped.
     heat: Vec<u8>,
     clock: f32,
@@ -301,7 +317,23 @@ pub struct Painter {
 impl Painter {
     /// Paint `canvas` at `t` seconds into `out`, `w`x`h` BGRA. The screen
     /// canvases aren't painted: `out` is left as is.
-    pub fn paint(&mut self, canvas: Canvas, t: f32, w: usize, h: usize, out: &mut Vec<u8>) {
+    pub fn paint(
+        &mut self,
+        canvas: Canvas,
+        look: &Look,
+        t: f32,
+        w: usize,
+        h: usize,
+        out: &mut Vec<u8>,
+    ) {
+        if matches!(canvas, Canvas::Screen | Canvas::Phthalo) {
+            return;
+        }
+        // The first frame starts at `t`.
+        let dt = self.last.map_or(t - self.time, |last| (t - last).max(0.0));
+        self.last = Some(t);
+        self.time += dt * look.control(canvas, "speed");
+        let t = self.time;
         out.resize(w * h * 4, 0);
         let mut img = Img {
             out,
@@ -311,12 +343,12 @@ impl Painter {
         };
         match canvas {
             Canvas::Screen | Canvas::Phthalo => {}
-            Canvas::Forest => forest(&mut img, t),
-            Canvas::Sunset => sunset(&mut img, t),
-            Canvas::Aurora => aurora(&mut img, t),
-            Canvas::Sea => sea(&mut img, t),
-            Canvas::Lava => lava(&mut img, t),
-            Canvas::Fire => self.fire(&mut img, t),
+            Canvas::Forest => forest(&mut img, look, t),
+            Canvas::Sunset => sunset(&mut img, look, t),
+            Canvas::Aurora => aurora(&mut img, look, t),
+            Canvas::Sea => sea(&mut img, look, t),
+            Canvas::Lava => lava(&mut img, look, t),
+            Canvas::Fire => self.fire(&mut img, look, t),
         }
     }
 
@@ -332,11 +364,14 @@ impl Painter {
 
     /// Doom's fire: heat rises a row at a time, cooling and drifting sideways
     /// at random. Steps 30 times a second whatever the frame rate.
-    fn fire(&mut self, img: &mut Img, t: f32) {
+    fn fire(&mut self, img: &mut Img, look: &Look, t: f32) {
+        let fire = look.colors(Canvas::Fire, "fire");
+        let room_glow = 0.2 * look.control(Canvas::Fire, "glow");
         const STEP: f32 = 1.0 / 30.0;
         let (w, h) = (img.w, img.h);
-        // Flames reach about 70% of the way up.
-        let max = (h as f32 * 0.36).clamp(8.0, 255.0) as u8;
+        // Flames reach about 70% of the way up at height 1.
+        let height = look.control(Canvas::Fire, "height");
+        let max = (h as f32 * 0.36 * height).clamp(8.0, 255.0) as u8;
         if self.heat.len() != w * h {
             self.heat = vec![0; w * h];
             self.clock = t;
@@ -367,15 +402,21 @@ impl Painter {
         img.fill(|x, y, _, _| {
             let v = heat[y * w + x] as f32 / max as f32;
             // A faint warm glow on the room behind the flames.
-            let room = 0.2 * (y as f32 * inv_h).powf(1.5);
-            ramp(&EMBER, v.max(room), x, y)
+            let room = room_glow * (y as f32 * inv_h).powf(1.5);
+            ramp(fire, v.max(room), x, y)
         });
     }
 }
 
 /// Clouds drift past a hidden moon over three rows of pines, the nearest
 /// sliding by fastest. A few fireflies blink in the dark.
-fn forest(img: &mut Img, t: f32) {
+fn forest(img: &mut Img, look: &Look, t: f32) {
+    let sky = look.colors(Canvas::Forest, "sky");
+    let trees = look.colors(Canvas::Forest, "trees");
+    let firefly = look.colors(Canvas::Forest, "fireflies")[0];
+    // More clouds: thinner noise counts as cloud.
+    let thin = 0.42 + 0.4 * (0.5 - look.control(Canvas::Forest, "clouds"));
+    let fireflies = look.control(Canvas::Forest, "fireflies").round() as i32;
     let width = img.width();
     let (moon_x, moon_y, moon_r) = (width * 0.74, 14.0, 4.0);
     let rows = [
@@ -425,23 +466,23 @@ fn forest(img: &mut Img, t: f32) {
                     0.35 * smoothstep(ground - 10.0, ground + 4.0, v)
                         * fbm(u * 0.05 + t * 0.03, v * 0.2 + i as f32, 2)
                 };
-                return ramp(&PINE, shade + mist, x, y);
+                return ramp(trees, shade + mist, x, y);
             }
         }
         let dm = ((u - moon_x).powi(2) + (v - moon_y).powi(2)).sqrt();
         let glow = (-dm * dm / 500.0).exp();
         let cloud = fbm(u * 0.035 + t * 0.012, v * 0.08 - t * 0.003, 4);
-        let cover = smoothstep(0.42, 0.62, cloud);
+        let cover = smoothstep(thin, thin + 0.2, cloud);
         // Lighter toward the horizon; clouds dark except where the moon lights them.
-        let sky = 0.2 + 0.25 * (v / 50.0) + 0.45 * glow;
+        let clear = 0.2 + 0.25 * (v / 50.0) + 0.45 * glow;
         let lit = 0.08 + 0.75 * glow + 0.3 * (cloud - 0.5);
-        let mut s = lerp(sky, lit, cover);
+        let mut s = lerp(clear, lit, cover);
         if dm < moon_r && cover < 0.6 {
             s = 1.0;
         }
-        ramp(&NIGHT, s, x, y)
+        ramp(sky, s, x, y)
     });
-    for i in 0..6 {
+    for i in 0..fireflies {
         let blink = (t * 0.8 + i as f32 * 1.7).sin();
         if blink < 0.4 {
             continue;
@@ -450,30 +491,35 @@ fn forest(img: &mut Img, t: f32) {
         let fy = 58.0 + 10.0 * hash(i, 91) + 2.0 * (t * 0.17 + i as f32 * 2.0).sin();
         let (px, py) = ((fx / img.k) as i32, (fy / img.k) as i32);
         if (0..img.w as i32).contains(&px) && (0..img.h as i32).contains(&py) {
-            img.put(px as usize, py as usize, FIREFLY);
+            img.put(px as usize, py as usize, firefly);
         }
     }
 }
 
 /// A low sun over the sea, streaks of cloud and a shimmering path of light.
-fn sunset(img: &mut Img, t: f32) {
+fn sunset(img: &mut Img, look: &Look, t: f32) {
+    let sky = look.colors(Canvas::Sunset, "sky");
+    let sea = look.colors(Canvas::Sunset, "sea");
     let width = img.width();
     let horizon = 44.0;
-    let (sun_x, sun_y, sun_r) = (width * 0.6, horizon - 5.0 + 1.5 * (t * 0.05).sin(), 7.0);
+    let rise = 50.0 * look.control(Canvas::Sunset, "sun");
+    let sun_r = 7.0 * look.control(Canvas::Sunset, "size");
+    let (sun_x, sun_y) = (width * 0.6, horizon - rise + 1.5 * (t * 0.05).sin());
+    let thin = 0.52 + 0.3 * (0.5 - look.control(Canvas::Sunset, "clouds"));
     img.fill(|x, y, u, v| {
         let dx = u - sun_x;
         if v < horizon {
             let d = (dx * dx + (v - sun_y).powi(2)).sqrt();
             if d < sun_r {
-                return ramp(&DUSK, 0.9 + 0.1 * (1.0 - d / sun_r), x, y);
+                return ramp(sky, 0.9 + 0.1 * (1.0 - d / sun_r), x, y);
             }
             let glow = (-d * d / 900.0).exp();
             let s = 0.85 * (v / horizon).powf(1.6) + 0.35 * glow;
             // Long thin clouds, dark on top and lit from below near the sun.
             let n = fbm(u * 0.025 + t * 0.01, v * 0.22, 4);
-            let cover = smoothstep(0.52, 0.64, n) * smoothstep(4.0, 12.0, v);
+            let cover = smoothstep(thin, thin + 0.12, n) * smoothstep(4.0, 12.0, v);
             let cloud = 0.12 + 0.2 * (v / horizon) + 0.55 * glow;
-            return ramp(&DUSK, lerp(s, cloud, cover), x, y);
+            return ramp(sky, lerp(s, cloud, cover), x, y);
         }
         let depth = (v - horizon) / (72.0 - horizon);
         // The sky's reflection, darker, with ripples.
@@ -483,12 +529,20 @@ fn sunset(img: &mut Img, t: f32) {
         let path = (-dx * dx / (spread * spread)).exp();
         let glint = fbm(u * 0.12 + t * 0.05, (v - horizon) * 1.1 - t * 0.6, 2);
         s += path * (0.25 + 0.7 * smoothstep(0.45, 0.65, glint)) * (1.0 - 0.5 * depth);
-        ramp(&TIDE, s, x, y)
+        ramp(sea, s, x, y)
     });
 }
 
 /// Curtains of green and violet wave over snowy hills and a few pines.
-fn aurora(img: &mut Img, t: f32) {
+fn aurora(img: &mut Img, look: &Look, t: f32) {
+    let lights = look.colors(Canvas::Aurora, "aurora");
+    let sky = look.colors(Canvas::Aurora, "sky");
+    let snow = look.colors(Canvas::Aurora, "snow");
+    let tree = look.colors(Canvas::Aurora, "trees")[0];
+    let star = look.colors(Canvas::Aurora, "stars")[0];
+    let glow = look.control(Canvas::Aurora, "glow");
+    // 3% of the sky at most.
+    let starry = 1.0 - 0.03 * look.control(Canvas::Aurora, "stars");
     let width = img.width();
     let pines = Pines {
         spacing: 7.0,
@@ -517,91 +571,109 @@ fn aurora(img: &mut Img, t: f32) {
             };
             let rays = 0.45 + 0.55 * noise(u * 0.35 + t * 0.15, t * 0.1 + jf * 4.0);
             let reach = smoothstep(0.3, 0.7, noise(u * 0.02 - t * 0.02, jf * 3.0 + 1.0));
-            let a = fall * rays * reach;
+            let a = fall * rays * reach * glow;
             green += a * (1.0 - smoothstep(6.0, 22.0, up));
             violet += 0.4 * a * smoothstep(10.0, 26.0, up);
         }
         let hill = 60.0 + 4.0 * (noise(u * 0.05, 5.0) - 0.5);
         if v >= hill || pines.hit(u, v, hill + 1.5) {
             if v < hill {
-                return PINE[0];
+                return tree;
             }
             // Snow catches the glow above.
             let depth = (v - hill) / (72.0 - hill);
-            return ramp(&SNOW, 0.35 + 0.4 * green.min(1.0) - 0.3 * depth, x, y);
+            return ramp(snow, 0.35 + 0.4 * green.min(1.0) - 0.3 * depth, x, y);
         }
-        if green + violet < 0.08 && hash(x as i32, y as i32) > 0.985 {
+        if green + violet < 0.08 && hash(x as i32, y as i32) > starry {
             let twinkle = (t * 1.5 + hash(y as i32, x as i32) * 40.0).sin();
-            return if twinkle > -0.3 { STAR } else { VIOLET[2] };
+            return if twinkle > -0.3 {
+                star
+            } else {
+                sky[sky.len() / 2]
+            };
         }
         if green > 0.1 && green >= violet {
-            ramp(&POLAR, 0.08 + green * 0.9, x, y)
+            ramp(lights, 0.08 + green * 0.9, x, y)
         } else {
             // A dark sky, lighter toward the hills.
-            let sky = 0.14 + 0.24 * (v / hill).powi(2);
-            ramp(&VIOLET, sky + violet, x, y)
+            let dark = 0.14 + 0.24 * (v / hill).powi(2);
+            ramp(sky, dark + violet, x, y)
         }
     });
 }
 
 /// Sunlight slanting down through the water, a web of caustics near the
 /// surface and flecks drifting in the dark below.
-fn sea(img: &mut Img, t: f32) {
+fn sea(img: &mut Img, look: &Look, t: f32) {
+    let water = look.colors(Canvas::Sea, "water");
+    let rays = 0.3 * look.control(Canvas::Sea, "rays");
+    let caustics = 0.45 * look.control(Canvas::Sea, "caustics");
+    // 1.2% of the deep water at most.
+    let snow = 1.0 - 0.012 * look.control(Canvas::Sea, "snow");
     img.fill(|x, y, u, v| {
         let d = v / 72.0;
         let mut s = 0.62 * (1.0 - d).powf(1.5);
         let ray = noise((u + v * 0.45) * 0.07 + t * 0.03, t * 0.05);
-        s += 0.3 * smoothstep(0.55, 0.8, ray) * (1.0 - d);
+        s += rays * smoothstep(0.55, 0.8, ray) * (1.0 - d);
         let a = noise(u * 0.12 + t * 0.12, v * 0.16 - t * 0.07);
         let b = noise(u * 0.1 - t * 0.09, v * 0.13 + t * 0.1);
         let web = (1.0 - (a - b).abs() * 6.0).max(0.0).powi(3);
-        s += 0.45 * web * (1.0 - d).powi(3);
+        s += caustics * web * (1.0 - d).powi(3);
         // Marine snow, sinking slowly.
         let flake = hash(x as i32, (v - t * 1.2).floor() as i32);
-        if flake > 0.994 && d > 0.3 {
+        if flake > snow && d > 0.3 {
             s += 0.25;
         }
-        ramp(&DEEP, s, x, y)
+        ramp(water, s, x, y)
     });
 }
 
 /// Warm blobs rising and sinking slowly, merging where they meet.
-fn lava(img: &mut Img, t: f32) {
+fn lava(img: &mut Img, look: &Look, t: f32) {
+    let lava = look.colors(Canvas::Lava, "lava");
+    let count = look.control(Canvas::Lava, "blobs").round() as usize;
+    let size = look.control(Canvas::Lava, "size");
+    let heat = 0.12 * look.control(Canvas::Lava, "heat");
     let width = img.width();
-    let blobs: [(f32, f32, f32); 7] = std::array::from_fn(|i| {
-        let fi = i as f32;
-        let x = width * (0.5 + 0.4 * (t * (0.031 + 0.011 * fi) + fi * 2.1).sin());
-        let y = 36.0 + 30.0 * (t * (0.043 + 0.009 * fi) + fi * 1.3).sin();
-        let r = 7.0 + 5.0 * hash(i as i32, 40);
-        (x, y, r * r)
-    });
+    let blobs: Vec<(f32, f32, f32)> = (0..count)
+        .map(|i| {
+            let fi = i as f32;
+            let x = width * (0.5 + 0.4 * (t * (0.031 + 0.011 * fi) + fi * 2.1).sin());
+            let y = 36.0 + 30.0 * (t * (0.043 + 0.009 * fi) + fi * 1.3).sin();
+            let r = (7.0 + 5.0 * hash(i as i32, 40)) * size;
+            (x, y, r * r)
+        })
+        .collect();
     img.fill(|x, y, u, v| {
         let f: f32 = blobs
             .iter()
             .map(|&(bx, by, r2)| r2 / ((u - bx).powi(2) + (v - by).powi(2) + 1.0))
             .sum();
         // Hotter at the bottom, where the lamp heats it.
-        let bg = 0.05 + 0.12 * (v / 72.0).powi(2);
+        let bg = 0.05 + heat * (v / 72.0).powi(2);
         let s = if f < 1.0 {
             bg + 0.3 * f * f
         } else {
             0.5 + 0.5 * smoothstep(1.0, 4.0, f)
         };
-        ramp(&LAVA, s, x, y)
+        ramp(lava, s, x, y)
     });
 }
 
-/// The screen in four shades of phthalo green, by brightness, dithered.
-pub fn phthalo(src: &Frame, out: &mut Vec<u8>) {
+/// The screen in the palette's shades (by default four of phthalo green), by
+/// brightness, dithered.
+pub fn phthalo(src: &Frame, look: &Look, out: &mut Vec<u8>) {
+    let shades = look.colors(Canvas::Phthalo, "shades");
+    let contrast = look.control(Canvas::Phthalo, "contrast") / 0.75;
     out.clear();
     out.reserve(src.width * src.height * 4);
     for y in 0..src.height {
         let row = &src.data[y * src.stride..y * src.stride + src.width * 4];
         for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
             let luma = (0.0722 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.2126 * p[2] as f32) / 255.0;
-            // A little contrast, so a normal picture uses all four.
-            let v = (luma - 0.05) / 0.75;
-            let [r, g, b] = ramp(&PHTHALO, v, x, y);
+            // A little contrast by default, so a normal picture uses them all.
+            let v = 0.5 + (luma - 0.425) * contrast;
+            let [r, g, b] = ramp(shades, v, x, y);
             out.extend_from_slice(&[b, g, r, 255]);
         }
     }
@@ -644,7 +716,7 @@ mod tests {
             let mut p = Painter::default();
             let mut out = Vec::new();
             for t in [0.0, 12.5, 3600.0] {
-                p.paint(scene, t, w, h, &mut out);
+                p.paint(scene, &Look::default(), t, w, h, &mut out);
             }
             assert_eq!(out.len(), w * h * 4, "{scene:?}");
             assert!(out.chunks(4).all(|px| px[3] == 255), "{scene:?} opaque");
@@ -660,8 +732,8 @@ mod tests {
         for scene in SCENES {
             let mut p = Painter::default();
             let (mut a, mut b) = (Vec::new(), Vec::new());
-            p.paint(scene, 10.0, 128, 72, &mut a);
-            p.paint(scene, 20.0, 128, 72, &mut b);
+            p.paint(scene, &Look::default(), 10.0, 128, 72, &mut a);
+            p.paint(scene, &Look::default(), 20.0, 128, 72, &mut b);
             assert_ne!(a, b, "{scene:?}");
         }
     }
@@ -682,12 +754,109 @@ mod tests {
             stride: w * 4,
         };
         let mut out = Vec::new();
-        phthalo(&f, &mut out);
+        let none = Look::default();
+        phthalo(&f, &none, &mut out);
         let colors: std::collections::HashSet<_> =
             out.chunks(4).map(|p| [p[2], p[1], p[0]]).collect();
+        let shades = none.colors(Canvas::Phthalo, "shades");
         assert_eq!(colors.len(), 4);
-        assert!(colors.iter().all(|c| PHTHALO.contains(c)));
+        assert!(colors.iter().all(|c| shades.contains(c)));
         assert_eq!(&out[..3], &[0x0f, 0x14, 0x06], "black is the darkest");
+
+        // Its own shades, from the app.
+        let two: Look =
+            serde_json::from_str(r##"{"palette": {"shades": ["#000000", "#ff0000"]}}"##).unwrap();
+        phthalo(&f, &two, &mut out);
+        let colors: std::collections::HashSet<_> =
+            out.chunks(4).map(|p| [p[2], p[1], p[0]]).collect();
+        assert_eq!(colors, [[0, 0, 0], [255, 0, 0]].into());
+    }
+
+    #[test]
+    fn every_scene_slot_has_a_default() {
+        // A slot without one paints pure black, which no default has.
+        let (w, h) = (128, 72);
+        for scene in SCENES {
+            let mut p = Painter::default();
+            let mut out = Vec::new();
+            for t in [0.0, 5.0, 12.5] {
+                p.paint(scene, &Look::default(), t, w, h, &mut out);
+                assert!(
+                    out.chunks(4).all(|px| px[..3] != [0, 0, 0]),
+                    "{scene:?} at {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn palettes_replace_slots_and_keep_the_rest() {
+        let p: Palette =
+            serde_json::from_str(r##"{"water": ["#ff0000", "#00ff00"], "sky": []}"##).unwrap();
+        assert_eq!(p.get(Canvas::Sea, "water"), [[255, 0, 0], [0, 255, 0]]);
+        // Empty or missing: the default.
+        assert_eq!(p.get(Canvas::Forest, "sky").len(), 8);
+        assert_eq!(p.get(Canvas::Lava, "lava").len(), 9);
+
+        let mut out = Vec::new();
+        let look = Look {
+            palette: p,
+            ..Look::default()
+        };
+        Painter::default().paint(Canvas::Sea, &look, 3.0, 128, 72, &mut out);
+        assert!(out
+            .chunks(4)
+            .all(|px| [[0, 0, 255], [0, 255, 0]].contains(&[px[0], px[1], px[2]])));
+
+        assert!(serde_json::from_str::<Palette>(r##"{"sky": ["#12345"]}"##).is_err());
+        assert!(serde_json::from_str::<Palette>(r##"{"sky": ["red"]}"##).is_err());
+    }
+
+    #[test]
+    fn controls_stay_in_range_and_default() {
+        let c: Controls =
+            serde_json::from_str(r#"{"blobs": 99, "size": 0.5, "speed": -1}"#).unwrap();
+        assert_eq!(c.get(Canvas::Lava, "blobs"), 12.0);
+        assert_eq!(c.get(Canvas::Lava, "size"), 0.5);
+        assert_eq!(c.get(Canvas::Lava, "speed"), 0.0);
+        assert_eq!(c.get(Canvas::Lava, "heat"), 1.0);
+        assert!(serde_json::from_str::<Controls>(r#"{"size": "big"}"#).is_err());
+    }
+
+    #[test]
+    fn every_scene_reads_its_controls() {
+        // Unknown keys trip a debug assertion; out-of-range ones still paint.
+        let all: Controls = serde_json::from_str(
+            r#"{"speed": 3, "clouds": 1, "fireflies": 24, "sun": 0.8, "size": 2, "glow": 2,
+                "stars": 1, "rays": 2, "caustics": 2, "snow": 1, "blobs": 12, "heat": 2,
+                "height": 1.4}"#,
+        )
+        .unwrap();
+        let look = Look {
+            controls: all,
+            ..Look::default()
+        };
+        for scene in SCENES {
+            let mut p = Painter::default();
+            let mut out = Vec::new();
+            for t in [0.0, 1.0, 2.0] {
+                p.paint(scene, &look, t, 128, 72, &mut out);
+            }
+            assert!(out.chunks(4).any(|px| px[..3] != out[..3]), "{scene:?}");
+        }
+    }
+
+    #[test]
+    fn speed_scales_scene_time_without_jumps() {
+        let still: Look = serde_json::from_str(r#"{"controls": {"speed": 0}}"#).unwrap();
+        let mut p = Painter::default();
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        p.paint(Canvas::Sea, &Look::default(), 10.0, 128, 72, &mut a);
+        p.paint(Canvas::Sea, &still, 20.0, 128, 72, &mut b);
+        assert_eq!(a, b, "stopped where it was");
+        let fast: Look = serde_json::from_str(r#"{"controls": {"speed": 2}}"#).unwrap();
+        p.paint(Canvas::Sea, &fast, 21.0, 128, 72, &mut b);
+        assert_eq!(p.time, 12.0);
     }
 
     /// Writes each scene as a PPM, for looking at:
@@ -704,7 +873,14 @@ mod tests {
             for (n, t) in [5.0f32, 40.0].iter().enumerate() {
                 // Warm up stateful scenes.
                 for k in 0..30 {
-                    p.paint(scene, t - 1.0 + k as f32 / 30.0, w, h, &mut out);
+                    p.paint(
+                        scene,
+                        &Look::default(),
+                        t - 1.0 + k as f32 / 30.0,
+                        w,
+                        h,
+                        &mut out,
+                    );
                 }
                 let mut ppm = format!("P6 {w} {h} 255\n").into_bytes();
                 ppm.extend(out.chunks(4).flat_map(|px| [px[2], px[1], px[0]]));

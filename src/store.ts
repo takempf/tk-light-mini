@@ -11,6 +11,7 @@ import {
   segmentSources,
   splitSection,
 } from "./lib/lights";
+import { enginePalette, freshName, fullColors, isDefault, palettesFor } from "./lib/palettes";
 import { linePath, type OldZone, resolvePath, zonePath } from "./lib/path";
 import { readSetupText, SETUP_FILE_NAME, setupText } from "./lib/setupFile";
 import { forget, readSaved, saveLater } from "./lib/storage";
@@ -23,6 +24,7 @@ import type {
   Hex,
   LightPath,
   MonitorInfo,
+  Palette,
   Rgb,
   ScreenImage,
   Section,
@@ -35,11 +37,13 @@ export const DEFAULT_SETTINGS: Settings = {
   fps: 30,
   monitor: 0,
   canvas: "screen",
+  palettes: {},
+  controls: {},
   tuning: { saturation: 1.3, brightness: 1, smoothing: 0.5 },
 };
 
 /** Saved-state version. Bump it, and add to `migrate`, when the saved shape changes. */
-const VERSION = 9;
+const VERSION = 11;
 
 /** A whole light (`section: null`) or one of its paths. */
 export interface Selection {
@@ -60,6 +64,8 @@ interface AppState {
   devices: AddedDevice[];
   enabled: boolean;
   settings: Settings;
+  /** The user's palettes, for every canvas. */
+  palettes: Palette[];
   // Runtime
   discovered: GoveeDevice[];
   scanning: boolean;
@@ -118,6 +124,17 @@ interface AppState {
   setFps: (fps: number) => void;
   setMonitor: (index: number) => void;
   setCanvas: (canvas: CanvasSource) => void;
+  /** Paint `canvas` with palette `id`. */
+  pickPalette: (canvas: CanvasSource, id: string) => void;
+  /** Copy a palette as a new one of the user's, and pick it. Returns its id. */
+  copyPalette: (from: Palette) => string;
+  /** Rename one of the user's palettes, or change its colors. Built-in ones don't change. */
+  editPalette: (id: string, patch: Partial<Pick<Palette, "name" | "colors">>) => void;
+  /** Delete one of the user's palettes. Canvases using it go back to built-in. */
+  deletePalette: (id: string) => void;
+  setControl: (canvas: CanvasSource, key: string, value: number) => void;
+  /** Put the canvas's controls back to their defaults. */
+  resetControls: (canvas: CanvasSource) => void;
   setTuning: (t: Partial<Tuning>) => void;
   resetTuning: () => void;
   /** Undo or redo the last layout or color edit. */
@@ -238,6 +255,7 @@ export const useStore = create<AppState>()(
         devices: [],
         enabled: false,
         settings: DEFAULT_SETTINGS,
+        palettes: [],
         discovered: [],
         scanning: false,
         scanError: null,
@@ -427,6 +445,54 @@ export const useStore = create<AppState>()(
         setFps: (fps) => set((s) => ({ settings: { ...s.settings, fps } })),
         setMonitor: (monitor) => set((s) => ({ settings: { ...s.settings, monitor } })),
         setCanvas: (canvas) => set((s) => ({ settings: { ...s.settings, canvas } })),
+        pickPalette: (canvas, id) =>
+          set((s) => ({
+            settings: { ...s.settings, palettes: { ...s.settings.palettes, [canvas]: id } },
+          })),
+        copyPalette: (from) => {
+          const { canvas } = from;
+          const taken = palettesFor(canvas, get().palettes).map((p) => p.name);
+          const palette: Palette = {
+            id: crypto.randomUUID(),
+            name: freshName(isDefault(from) ? "Custom" : `${from.name} copy`, taken),
+            canvas,
+            colors: fullColors(from),
+          };
+          set((s) => ({ palettes: [...s.palettes, palette] }));
+          get().pickPalette(canvas, palette.id);
+          return palette.id;
+        },
+        editPalette: (id, patch) =>
+          set((s) => ({
+            palettes: s.palettes.map((p) =>
+              p.id === id && !isDefault(p) ? { ...p, ...patch } : p,
+            ),
+          })),
+        deletePalette: (id) =>
+          set((s) => ({
+            palettes: s.palettes.filter((p) => p.id !== id),
+            settings: {
+              ...s.settings,
+              palettes: Object.fromEntries(
+                Object.entries(s.settings.palettes).filter(([, picked]) => picked !== id),
+              ),
+            },
+          })),
+        setControl: (canvas, key, value) =>
+          set((s) => ({
+            settings: {
+              ...s.settings,
+              controls: {
+                ...s.settings.controls,
+                [canvas]: { ...s.settings.controls[canvas], [key]: value },
+              },
+            },
+          })),
+        resetControls: (canvas) =>
+          set((s) => {
+            const { [canvas]: _, ...controls } = s.settings.controls;
+            return { settings: { ...s.settings, controls } };
+          }),
         setTuning: (t) =>
           set((s) => ({ settings: { ...s.settings, tuning: { ...s.settings.tuning, ...t } } })),
         resetTuning: () =>
@@ -482,14 +548,17 @@ export const useStore = create<AppState>()(
             };
           }),
         exportSetup: async () => {
-          const { devices, settings } = get();
-          return api.exportSetup(SETUP_FILE_NAME, setupText({ devices, settings }, VERSION));
+          const { devices, settings, palettes } = get();
+          return api.exportSetup(
+            SETUP_FILE_NAME,
+            setupText({ devices, settings, palettes }, VERSION),
+          );
         },
         importSetup: async () => {
           const text = await api.importSetup();
           if (text === null) return false;
           const { state, version } = readSetupText(text, VERSION);
-          const { devices, settings } = migrate(state, version);
+          const { devices, settings, palettes } = migrate(state, version);
           endDrawing();
           lastKey = null;
           set({
@@ -499,6 +568,8 @@ export const useStore = create<AppState>()(
               ...settings,
               tuning: { ...DEFAULT_SETTINGS.tuning, ...settings.tuning },
             },
+            // Files from before palettes keep the ones here.
+            ...(palettes && { palettes }),
             selection: null,
             drawing: false,
             points: [],
@@ -517,7 +588,12 @@ export const useStore = create<AppState>()(
       name: "tk-light-mini",
       version: VERSION,
       migrate: (old, version) => migrate(old, version),
-      partialize: (s) => ({ devices: s.devices, enabled: s.enabled, settings: s.settings }),
+      partialize: (s) => ({
+        devices: s.devices,
+        enabled: s.enabled,
+        settings: s.settings,
+        palettes: s.palettes,
+      }),
       storage: settledStorage(),
     },
   ),
@@ -579,6 +655,14 @@ export function migrate(old: unknown, version: number): AppState {
   if (version < 9 && s.devices) {
     s.devices = s.devices.filter((d) => !d.ip.startsWith("icue:"));
   }
+  // v10: canvases have palettes, built-in until picked otherwise.
+  if (version < 10 && s.settings) {
+    s.settings = { ...s.settings, palettes: s.settings.palettes ?? {} };
+  }
+  // v11: and controls, at their defaults until changed.
+  if (version < 11 && s.settings) {
+    s.settings = { ...s.settings, controls: s.settings.controls ?? {} };
+  }
   return s as unknown as AppState;
 }
 
@@ -619,7 +703,8 @@ function testDevice(d: AddedDevice, color: Hex, raw: boolean): EngineDevice {
  * off. With sync on, the other lights go dark, so only its glow is on the wall.
  */
 export function toEngineConfig(
-  s: Pick<AppState, "enabled" | "settings" | "devices"> & Partial<Pick<AppState, "calibrating">>,
+  s: Pick<AppState, "enabled" | "settings" | "devices"> &
+    Partial<Pick<AppState, "calibrating" | "palettes">>,
   aspect = 16 / 9,
 ): EngineConfig {
   const cal = s.calibrating;
@@ -629,6 +714,8 @@ export function toEngineConfig(
     fps: s.settings.fps,
     monitor: s.settings.monitor,
     canvas: s.settings.canvas,
+    palette: enginePalette(s.settings.canvas, s.settings.palettes ?? {}, s.palettes ?? []),
+    controls: s.settings.controls?.[s.settings.canvas] ?? {},
     tuning: s.settings.tuning,
   };
   if (cal && testing) {

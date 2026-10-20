@@ -120,10 +120,33 @@ export type CanvasSource =
   | "lava"
   | "fire";
 
+/**
+ * Colors a canvas paints with, by slot ("sky", "trees"...): each a ramp from
+ * dark to light, or one color. See `SLOTS`.
+ */
+export type PaletteColors = Record<string, Hex[]>;
+
+/** A set of colors for one canvas: its built-in one, or made by the user. */
+export interface Palette {
+  /** A built-in palette's is its canvas. */
+  id: string;
+  name: string;
+  canvas: CanvasSource;
+  /** Slots missing here take the built-in colors. */
+  colors: PaletteColors;
+}
+
+/** A canvas's own settings ("speed", "clouds"...), by key. See `controlsOf`. */
+export type Controls = Record<string, number>;
+
 export interface Settings {
   fps: number;
   monitor: number;
   canvas: CanvasSource;
+  /** The palette picked for each canvas, by id. Missing = its built-in one. */
+  palettes: Partial<Record<CanvasSource, string>>;
+  /** Each canvas's controls, where changed. Missing = the defaults. */
+  controls: Partial<Record<CanvasSource, Controls>>;
   tuning: Tuning;
 }
 
@@ -144,6 +167,10 @@ export interface EngineConfig {
   fps: number;
   monitor: number;
   canvas: CanvasSource;
+  /** The canvas's colors. Empty = its built-in ones. */
+  palette: PaletteColors;
+  /** The canvas's controls. Missing ones take the defaults. */
+  controls: Controls;
   tuning: Tuning;
   devices: {
     ip: string;

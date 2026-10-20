@@ -4,6 +4,8 @@ What changed in each release. `pnpm release` moves the notes under **Unreleased*
 
 ## Unreleased
 
+- Recolor painted canvases: copy a palette, change its colors, and pick it per canvas. Palettes go with exported setups.
+- Each painted canvas has its own sliders, like speed, clouds or fireflies.
 - Drag the Canvas panel taller or shorter, like the others.
 - Corsair lights through iCUE are gone. The app no longer starts iCUE, and Corsair lights in a saved setup are dropped.
 

@@ -1003,6 +1003,42 @@ body {
   opacity: 0.8;
 }
 
+.palette-settings {
+  gap: var(--tk-space-2);
+}
+/* The canvas's own settings, set apart from the tuning below. */
+.canvas-controls {
+  gap: var(--tk-space-3);
+  padding-bottom: var(--tk-space-3);
+  border-bottom: var(--tk-border-width) solid var(--tk-border-subtle);
+}
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--tk-space-1);
+}
+.palette-select {
+  flex: 1;
+  min-width: 0;
+}
+.palette-row .tk-button {
+  flex: none;
+}
+.palette-slot {
+  display: grid;
+  gap: var(--tk-space-1);
+}
+.palette-stops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tk-space-1);
+}
+.palette-stop {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
 /* Narrow windows: the screen on top, settings below. -------------------- */
 
 @media (max-width: 700px) {
