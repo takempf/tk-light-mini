@@ -454,7 +454,8 @@ body {
     var(--layers-row, minmax(var(--panel-head-h), var(--layers-size, 40fr)))
     var(--divider-size, 7px)
     var(--details-row, minmax(var(--panel-head-h), var(--details-size, 60fr)))
-    var(--canvas-row, calc(var(--panel-head-h) + var(--tk-border-width)));
+    var(--canvas-divider-size, var(--tk-border-width))
+    var(--canvas-row, var(--panel-head-h));
   min-height: 0;
   overflow: hidden;
   border-left: var(--tk-border-width) solid var(--tk-border-subtle);
@@ -498,9 +499,6 @@ body {
     transform 260ms ease,
     visibility 0s linear 260ms;
 }
-.canvas-pane {
-  border-top: var(--tk-border-width) solid var(--tk-border-subtle);
-}
 .layers-pane .panel-body {
   padding-inline: 0;
 }
@@ -525,6 +523,11 @@ body {
   transition:
     opacity 180ms ease,
     visibility 0s linear 260ms;
+}
+/* The canvas panel's divider stays as its top border while it can't resize. */
+.canvas-divider[aria-hidden="true"] {
+  opacity: 1;
+  visibility: visible;
 }
 .panel-divider::after {
   position: absolute;

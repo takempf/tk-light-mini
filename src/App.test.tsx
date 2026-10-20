@@ -49,8 +49,10 @@ describe("App", () => {
     const first = render(<App />);
     const divider = screen.getByRole("separator", { name: "Resize Lights and Details" });
     const sidebar = screen.getByRole("complementary", { name: "Lights, details, and canvas" });
-    vi.spyOn(sidebar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 320, 507));
-    vi.spyOn(divider, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 200, 320, 7));
+    for (const name of ["Lights", "Details"]) {
+      const pane = screen.getByRole("region", { name });
+      vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 320, 250));
+    }
     divider.setPointerCapture = vi.fn();
     divider.releasePointerCapture = vi.fn();
     fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientY: 200 });
@@ -72,6 +74,27 @@ describe("App", () => {
     expect(restored).toHaveAttribute("aria-valuenow", "20");
     fireEvent.doubleClick(restored);
     expect(restored).toHaveAttribute("aria-valuenow", "40");
+  });
+
+  it("resizes the canvas panel against the open panel above it", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const sidebar = screen.getByRole("complementary", { name: "Lights, details, and canvas" });
+    // Closed, the divider is only a border.
+    expect(screen.queryByRole("separator", { name: "Resize Details and Canvas" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    const divider = screen.getByRole("separator", { name: "Resize Details and Canvas" });
+    expect(divider).toHaveAttribute("aria-valuenow", "60");
+    fireEvent.keyDown(divider, { key: "ArrowDown", shiftKey: true });
+    expect(divider).toHaveAttribute("aria-valuenow", "70");
+    // Details gave up what the canvas took; the lights kept theirs.
+    expect(sidebar.style.getPropertyValue("--details-size")).toBe("70fr");
+    expect(sidebar.style.getPropertyValue("--canvas-row")).toBe(
+      "minmax(var(--panel-head-h), 30fr)",
+    );
+    expect(sidebar.style.getPropertyValue("--layers-size")).toBe("40fr");
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByRole("separator", { name: "Resize Lights and Canvas" })).toBeInTheDocument();
   });
 
   it("collapses sidebar panels from their headings", async () => {
