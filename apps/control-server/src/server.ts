@@ -10,6 +10,7 @@ import { extname, resolve, sep } from "node:path";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LightEngine, type LightOutput } from "./engine.js";
 import { FrameRegistry, parseFrame } from "./frames.js";
+import { PreviewSlot } from "./preview.js";
 import { type SetupStore, validateSetup } from "./setup.js";
 import type { Setup } from "./types.js";
 
@@ -24,6 +25,11 @@ interface ServerOptions {
   senderTokens?: Record<string, string>;
   adminDist?: string;
 }
+
+/** Between preview updates, as often as the desktop app makes them. */
+const PREVIEW_MS = 100;
+/** How long a preview request waits for something to change. */
+const PREVIEW_WAIT_MS = 1000;
 
 const equal = (a: string, b: string) => {
   const aa = Buffer.from(a),
@@ -58,8 +64,8 @@ export function createControlServer({
   const engine = new LightEngine(frames, lights);
   const sockets = new Map<string, WebSocket>();
   const ws = new WebSocketServer({ noServer: true, maxPayload: 300_000 });
+  const preview = new PreviewSlot();
   let discovered: { id: string; ip: string; sku: string }[] = [];
-  let sequence = 0;
   let lastError: string | null = null;
 
   const server = createHttpServer(async (req, res) => {
@@ -101,7 +107,6 @@ export function createControlServer({
         for (const device of next.devices)
           if (!device.on && previous.devices.some((old) => old.id === device.id && old.on))
             lights.turn(device.ip, false);
-        sequence++;
         return json(res, 200, next);
       }
       if (url.pathname === "/api/status" && req.method === "GET")
@@ -129,17 +134,19 @@ export function createControlServer({
         const section = sectionText === null ? undefined : Number(sectionText);
         if (section !== undefined && (!Number.isSafeInteger(section) || section < 0))
           throw new Error("Invalid section");
-        const frame = device
-          ? engine.previewFor(store.get(), Date.now(), device, section)
-          : engine.preview;
-        return json(res, 200, {
-          seq: sequence,
-          status: { running: store.get().enabled, error: lastError },
-          paths: Object.fromEntries(engine.live),
-          image: frame
-            ? { width: frame.width, height: frame.height, bgra: frame.bgra.toString("base64") }
-            : null,
+        const after = Number(url.searchParams.get("after") ?? 0);
+        if (!Number.isSafeInteger(after) || after < 0) throw new Error("Invalid sequence");
+        const target = JSON.stringify([device ?? null, device ? (section ?? null) : null]);
+        preview.watch(target, Date.now());
+        const gone = new AbortController();
+        res.once("close", () => gone.abort());
+        const message = await preview.wait(after, target, PREVIEW_WAIT_MS, gone.signal);
+        res.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "cache-control": "no-store",
         });
+        res.end(message);
+        return;
       }
       const power = /^\/api\/devices\/([^/]+)\/power$/.exec(url.pathname);
       if (power && req.method === "POST") {
@@ -151,7 +158,6 @@ export function createControlServer({
         device.on = body.on;
         const next = await store.update(setup, setup.revision);
         lights.turn(device.ip, body.on);
-        sequence++;
         return json(res, 200, next);
       }
       if (url.pathname === "/api/power-now" && req.method === "POST") {
@@ -252,7 +258,6 @@ export function createControlServer({
         if (now - lastFrameAt < 15) return;
         lastFrameAt = now;
         frames.publish(id, parseFrame(Buffer.from(data as Buffer)), now);
-        sequence++;
       } catch {
         client.close(1008, "Invalid publisher message");
       }
@@ -262,23 +267,40 @@ export function createControlServer({
       if (id && sockets.get(id) === client) {
         sockets.delete(id);
         frames.disconnect(id);
-        sequence++;
       }
     });
   });
 
   let lastRun = 0;
+  let lastPreview = 0;
   const timer = setInterval(() => {
+    const setup = store.get();
+    const now = Date.now();
+    if (now - lastRun < 1000 / setup.fps) return;
+    const watched = preview.watched(now);
+    // Sync off and no admin looking: nothing to do, once the lights are handed back.
+    if (!setup.enabled && watched.length === 0 && !engine.busy) return;
+    lastRun = now;
     try {
-      const setup = store.get();
-      const now = Date.now();
-      if (now - lastRun < 1000 / setup.fps) return;
-      lastRun = now;
       engine.tick(setup, now);
       lastError = null;
-      sequence++;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
+    }
+    if (watched.length === 0 || now - lastPreview < PREVIEW_MS) return;
+    lastPreview = now;
+    // Running means making colors and frames, sync or not, as in the desktop app.
+    preview.setStatus(lastError === null, lastError);
+    preview.setPaths(engine.live);
+    for (const target of watched) {
+      const [device, section] = JSON.parse(target) as [string | null, number | null];
+      // Right after the tick, so the frames it painted are reused.
+      preview.setImage(
+        target,
+        device === null
+          ? engine.preview
+          : engine.previewFor(setup, now, device, section ?? undefined),
+      );
     }
   }, 10);
   timer.unref();

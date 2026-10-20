@@ -92,6 +92,11 @@ export class LightEngine {
     private readonly output: LightOutput,
   ) {}
 
+  /** Lights still follow it, or still have to be handed back. */
+  get busy(): boolean {
+    return this.previous.size > 0;
+  }
+
   hold(id: string, until: number): void {
     this.held.set(id, until);
     const old = this.previous.get(id);

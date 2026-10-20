@@ -1,4 +1,4 @@
-import type { Preview } from "./preview";
+import { decodePreview, type Preview } from "./preview";
 import type { EngineConfig, GoveeDevice, LightFrameSource, MonitorInfo } from "./types";
 
 export interface ServerSetup {
@@ -20,7 +20,11 @@ export interface SenderStatus {
 
 const token = () => localStorage.getItem("tk-light-admin-token") ?? "";
 let previewTarget: { id: string; section: number | null } | null = null;
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+/** The preview target the last poll asked for. */
+let askedTarget = "";
+/** Ends the poll in flight when the target changes, so the new frame comes at once. */
+let retarget = new AbortController();
+async function send(path: string, options: RequestInit = {}): Promise<Response> {
   const res = await fetch(path, {
     ...options,
     headers: {
@@ -33,19 +37,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? res.statusText);
   }
-  return res.json() as Promise<T>;
+  return res;
 }
-
-function decodeImage(image: { width: number; height: number; bgra: string }) {
-  const bytes = Uint8Array.from(atob(image.bgra), (c) => c.charCodeAt(0));
-  for (let i = 0; i < bytes.length; i += 4)
-    [bytes[i], bytes[i + 2]] = [bytes[i + 2] as number, bytes[i] as number];
-  return { width: image.width, height: image.height, rgba: new Uint8ClampedArray(bytes.buffer) };
-}
+const request = async <T>(path: string, options: RequestInit = {}): Promise<T> =>
+  (await send(path, options)).json() as Promise<T>;
 
 export const browserApi = {
   setPreviewTarget: (target: { id: string; section: number | null } | null) => {
+    const same = target?.id === previewTarget?.id && target?.section === previewTarget?.section;
     previewTarget = target;
+    if (same) return;
+    retarget.abort();
+    retarget = new AbortController();
   },
   getSetup: () => request<ServerSetup>("/api/setup"),
   saveSetup: (setup: ServerSetup, expectedRevision: number) =>
@@ -101,24 +104,28 @@ export const browserApi = {
   version: async () => "server",
   checkUpdate: async () => null,
   installUpdate: async () => {},
-  nextPreview: async (_after: number): Promise<Preview> => {
-    const data = await request<{
-      seq: number;
-      status: Preview["status"];
-      paths: Record<string, import("./types").Rgb[]>;
-      image: { width: number; height: number; bgra: string } | null;
-    }>(
-      previewTarget
-        ? `/api/preview?device=${encodeURIComponent(previewTarget.id)}${previewTarget.section === null ? "" : `&section=${previewTarget.section}`}`
-        : "/api/preview",
-    );
-    await new Promise((r) => setTimeout(r, 250));
-    return {
-      seq: data.seq,
-      status: data.status,
-      paths: Object.entries(data.paths).map(([ip, colors]) => ({ ip, colors })),
-      image: data.image ? decodeImage(data.image) : null,
-    };
+  /** Waits on the server until something changes, as the desktop app's does. */
+  nextPreview: async (after: number): Promise<Preview> => {
+    for (;;) {
+      const { signal } = retarget;
+      const params = new URLSearchParams();
+      if (previewTarget) {
+        params.set("device", previewTarget.id);
+        if (previewTarget.section !== null) params.set("section", String(previewTarget.section));
+      }
+      // This target's frame may not have come yet: ask for everything.
+      const target = params.toString();
+      params.set("after", String(target === askedTarget ? after : 0));
+      askedTarget = target;
+      try {
+        return decodePreview(
+          await (await send(`/api/preview?${params}`, { signal })).arrayBuffer(),
+        );
+      } catch (error) {
+        // Ask again, for the new target.
+        if (!signal.aborted) throw error;
+      }
+    }
   },
   minimize: async () => {},
   toggleMaximize: async () => {},

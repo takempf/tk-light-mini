@@ -42,6 +42,10 @@ describe("decodePreview", () => {
     expect([...(m.image?.rgba ?? [])]).toEqual([10, 20, 30, 255, 40, 50, 60, 255]);
   });
 
+  it("reads a 0 x 0 image as no frame", () => {
+    expect(decodePreview(message(1, 4, [...u16(0), ...u16(0)])).image).toBeNull();
+  });
+
   it("reads a running engine without an error", () => {
     expect(decodePreview(message(1, 1, [1, 0, 0, 0])).status).toEqual({
       running: true,

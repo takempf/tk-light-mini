@@ -132,10 +132,20 @@ it("authenticates, saves configuration, accepts a screen frame, and drives one l
       }
     ).senders[0]?.online,
   ).toBe(true);
-  const preview = (await (
-    await fetch(`${base}/api/preview?device=one&section=0`, { headers: authorized })
-  ).json()) as { image?: { bgra: string } };
-  expect(preview.image?.bgra).toBeTruthy();
+  const preview = Buffer.from(
+    await (
+      await fetch(`${base}/api/preview?device=one&section=0`, { headers: authorized })
+    ).arrayBuffer(),
+  );
+  // Status, colors and the section's frame, in RGBA: 4 x 2 red pixels.
+  expect(preview[8]).toBe(1 | 2 | 4);
+  expect([...preview.subarray(-36)]).toEqual([
+    4,
+    0,
+    2,
+    0,
+    ...Array.from({ length: 8 }, () => [255, 0, 0, 255]).flat(),
+  ]);
   expect(
     (await fetch(`${base}/api/preview?device=one&section=bad`, { headers: authorized })).status,
   ).toBe(400);
@@ -155,4 +165,48 @@ it("authenticates, saves configuration, accepts a screen frame, and drives one l
   ws.close();
   await new Promise<void>((resolve) => ws.once("close", resolve));
   await vi.waitFor(() => expect(app.frames.statuses()[0]?.online).toBe(false));
+});
+
+it("rests while sync is off and no admin looks, and sends the admin only what changed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tk-light-api-"));
+  const store = new SetupStore(join(dir, "setup.json"));
+  await store.load();
+  const setup = store.get();
+  setup.devices = [
+    {
+      id: "one",
+      ip: "192.168.1.2",
+      sku: "H6056",
+      name: "Bar",
+      on: true,
+      razer: false,
+      brightness: 1,
+      sections: [{ count: 1, color: "#ff0000" }],
+    },
+  ];
+  await store.update(setup, 0);
+  const app = createControlServer({
+    store,
+    adminToken: "admin-secret-long",
+    lights: { turn() {}, color() {}, razer() {} },
+  });
+  open.push(app);
+  await new Promise<void>((resolve) => app.server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+  const poll = async (after: number) =>
+    Buffer.from(
+      await (
+        await fetch(`${base}/api/preview?after=${after}`, {
+          headers: { authorization: "Bearer admin-secret-long" },
+        })
+      ).arrayBuffer(),
+    );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(app.engine.live.size).toBe(0);
+  const first = await poll(0);
+  expect(first[8]).toBe(1 | 2 | 4);
+  expect(app.engine.live.has("192.168.1.2")).toBe(true);
+  // The scene moves on; the status and the light's fixed color don't.
+  const next = await poll(Number(first.readBigUInt64LE(0)));
+  expect(next[8]).toBe(4);
 });

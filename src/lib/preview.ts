@@ -61,8 +61,11 @@ export function decodePreview(buf: ArrayBuffer): Preview {
   if (parts & IMAGE) {
     const width = u16();
     const height = u16();
-    // A view, not a copy: the message is only this frame's.
-    out.image = { width, height, rgba: new Uint8ClampedArray(buf, at, width * height * 4) };
+    // A view, not a copy: the message is only this frame's. No frame is 0 x 0.
+    out.image =
+      width && height
+        ? { width, height, rgba: new Uint8ClampedArray(buf, at, width * height * 4) }
+        : null;
   }
   return out;
 }
