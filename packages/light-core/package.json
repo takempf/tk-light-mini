@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./path": "./src/path.ts",
+    "./sections": "./src/sections.ts",
     "./types": "./src/types.ts"
   }
 }

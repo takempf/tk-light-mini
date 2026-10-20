@@ -1,7 +1,26 @@
+import { fitSections } from "../../../packages/light-core/src/sections.js";
 import { calibrate, rgb, samplePath, scale } from "./color.js";
 import type { FrameRegistry } from "./frames.js";
 import { ScenePainter } from "./scenes.js";
 import type { Device, Frame, FrameSource, Rgb, Setup } from "./types.js";
+
+/** Segments the light shows: its razer count, or one without razer mode. */
+const segmentCount = (device: Device) =>
+  device.razer
+    ? Math.max(
+        1,
+        Math.min(
+          100,
+          device.segments ?? (device.sku === "H61F5" ? 10 : device.sku === "H6056" ? 12 : 15),
+        ),
+      )
+    : 1;
+
+/**
+ * The light's sections fitted to its segments, the way the editor lays them
+ * out. A section saved longer than the light would otherwise sample past it.
+ */
+const sectionsOf = (device: Device) => fitSections(device.sections, segmentCount(device));
 
 export interface LightOutput {
   turn(ip: string, on: boolean): void;
@@ -145,7 +164,7 @@ export class LightEngine {
       const calibrating = calibration?.id === device.id;
       if (!device.on && !calibrating) continue;
       const pathColors = calibration
-        ? Array.from({ length: Math.max(1, device.razer ? (device.segments ?? 15) : 1) }, () =>
+        ? Array.from({ length: segmentCount(device) }, () =>
             device.id === calibration.id ? calibration.color : ([0, 0, 0] as Rgb),
           )
         : this.pathColors(device, setup, now);
@@ -222,7 +241,7 @@ export class LightEngine {
 
   private pathColors(device: Device, setup: Setup, now: number): Rgb[] {
     const out: Rgb[] = [];
-    for (const section of device.sections) {
+    for (const section of sectionsOf(device)) {
       const source = section.source ?? device.source ?? setup.source;
       const frame = this.sourceFrame(source, now);
       const colors =
@@ -237,24 +256,16 @@ export class LightEngine {
   }
 
   private segmentSources(device: Device): string[] {
-    const count = device.razer
-      ? Math.max(
-          1,
-          Math.min(
-            100,
-            device.segments ?? (device.sku === "H61F5" ? 10 : device.sku === "H6056" ? 12 : 15),
-          ),
-        )
-      : 1;
-    const sections = device.sections.flatMap((section) =>
+    const fitted = sectionsOf(device);
+    const sections = fitted.flatMap((section) =>
       Array.from({ length: section.count }, () =>
         section.on === false ? "#000000" : section.color,
       ),
     );
-    const off = device.sections.flatMap((section) =>
+    const off = fitted.flatMap((section) =>
       Array.from({ length: section.count }, () => section.on === false),
     );
-    return Array.from({ length: count }, (_, i) =>
+    return Array.from({ length: segmentCount(device) }, (_, i) =>
       off[i] ? "#000000" : (device.segmentColors?.[i] ?? sections[i] ?? "#000000"),
     );
   }

@@ -190,3 +190,50 @@ it("samples colors for the editor while sync is off without sending them", () =>
   engine.tick({ ...setup, enabled: true }, 1100);
   expect(sent).toContain("color 192.168.1.2");
 });
+
+it("fits sections to the light's segments, so a resized light still covers its path", () => {
+  const frames = new FrameRegistry();
+  frames.connect("tv", "TV");
+  const halves: Frame = {
+    width: 8,
+    height: 2,
+    sequence: 1,
+    capturedAt: 100,
+    bgra: Buffer.from(
+      Array.from({ length: 16 }, (_, i) =>
+        i % 8 < 4 ? [0, 0, 255, 255] : [255, 0, 0, 255],
+      ).flat(),
+    ),
+  };
+  frames.publish("tv", halves, 1000);
+  const sent: Rgb[][] = [];
+  const engine = new LightEngine(frames, {
+    turn() {},
+    color() {},
+    razer(_ip, value) {
+      if (Array.isArray(value)) sent.push(value);
+    },
+  });
+  const one = light("one", "192.168.1.2");
+  const setup = (segments: number, count: number): Setup => ({
+    ...structuredClone(DEFAULT_SETUP),
+    enabled: true,
+    tuning: { saturation: 1, brightness: 1, smoothing: 0 },
+    source: { kind: "remote", senderId: "tv" },
+    devices: [
+      {
+        ...one,
+        razer: true,
+        segments,
+        sections: [{ count, color: "path", path: one.sections[0]?.path }],
+      },
+    ],
+  });
+  const red: Rgb = [255, 0, 0],
+    blue: Rgb = [0, 0, 255];
+  engine.tick(setup(2, 4), 1000);
+  expect(sent.at(-1)).toEqual([red, blue]);
+  expect(engine.live.get("192.168.1.2")).toEqual([red, blue]);
+  engine.tick(setup(4, 2), 1100);
+  expect(sent.at(-1)).toEqual([red, red, blue, blue]);
+});
